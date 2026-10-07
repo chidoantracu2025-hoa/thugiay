@@ -351,17 +351,6 @@
               <input id="searchPlot" type="text" inputmode="text" placeholder="Số thửa mới" />
             </div>
           </div>
-          <!-- BỔ SUNG THÊM 2 MỤC TÌM KIẾM TỜ/THỬA CŨ -->
-          <div class="grid-2">
-            <div class="field">
-              <label>Số hiệu tờ bản đồ cũ</label>
-              <input id="searchMapSheetOld" type="text" inputmode="text" placeholder="Số tờ cũ" />
-            </div>
-            <div class="field">
-              <label>Số thứ tự thửa cũ</label>
-              <input id="searchPlotOld" type="text" inputmode="text" placeholder="Số thửa cũ" />
-            </div>
-          </div>
         </div>
         <div class="mt-8">
           <button class="primary" type="button" onclick="searchRecords()">Tìm kiếm hồ sơ</button>
@@ -653,25 +642,14 @@
       }
     }
 
-    // BỔ SUNG LẤY DỮ LIỆU TỜ/THỬA CỦ ĐỂ GỬI QUA API SEARCH
     async function searchRecords() {
       const query = document.getElementById('searchQuery').value.trim();
       const name = document.getElementById('searchName').value.trim();
       const soHieuToBanDoMoi = document.getElementById('searchMapSheet').value.trim();
       const soThuTuThuaMoi = document.getElementById('searchPlot').value.trim();
-      const soHieuToBanDoCu = document.getElementById('searchMapSheetOld').value.trim();
-      const soThuTuThuaCu = document.getElementById('searchPlotOld').value.trim();
       try {
         setStatus('Đang tìm kiếm...', 'normal');
-        const data = await apiRequest('SEARCH', { 
-          query, 
-          name, 
-          soHieuToBanDoMoi, 
-          soThuTuThuaMoi,
-          soHieuToBanDoCu,
-          soThuTuThuaCu,
-          limit: 20 
-        });
+        const data = await apiRequest('SEARCH', { query, name, soHieuToBanDoMoi, soThuTuThuaMoi, limit: 20 });
         renderSearchResults(data.data || []);
         setStatus(data.data && data.data.length ? 'Tìm thấy dữ liệu' : 'Không có dữ liệu', data.data && data.data.length ? 'success' : 'normal');
       } catch (error) {
@@ -2073,7 +2051,7 @@
     }
 
     function clearForm() {
-      ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText','searchMapSheetOld','searchPlotOld']
+      ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText']
         .forEach(id => { const node = document.getElementById(id); if (node) node.value = ''; });
 
       state.documentPages = [];
