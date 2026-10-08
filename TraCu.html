@@ -558,10 +558,10 @@
 
     let cccdOcrWorker = null;
     const apiUrlInput = document.getElementById('webAppUrl');
-    apiUrlInput.value = localStorage.getItem('landApiUrl') || apiUrlInput.value;
+    apiUrlInput.value = localStorage.getItem('TraCulandApiUrl') || apiUrlInput.value;
 
     function saveApiUrl() {
-      localStorage.setItem('landApiUrl', document.getElementById('webAppUrl').value.trim());
+      localStorage.setItem('TraCulandApiUrl', document.getElementById('webAppUrl').value.trim());
     }
 
     document.getElementById('scanMode').value = ['opencv', 'fallback', 'all'].includes(state.scanMode) ? state.scanMode : 'opencv';
