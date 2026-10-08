@@ -541,7 +541,7 @@
       pendingRetakeId: null,
       colorCheckFrame: 0,
       grayscaleSamples: 0,
-      scanMode: localStorage.getItem('landScanMode') || 'opencv'
+      scanMode: localStorage.getItem('TraCulandScanMode') || 'opencv'
     };
 
     const opencvReady = Promise.resolve(window.cv).then(module => {
@@ -568,7 +568,7 @@
 
     function setScanMode(mode) {
       state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
-      localStorage.setItem('landScanMode', state.scanMode);
+      localStorage.setItem('TraCulandScanMode', state.scanMode);
       setStatus(`Đã chọn căn chỉnh: ${state.scanMode === 'opencv' ? 'OpenCV' : state.scanMode === 'fallback' ? 'Dự phòng' : 'Tất cả'}`, 'success');
     }
 
