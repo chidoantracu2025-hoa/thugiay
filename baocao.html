@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Báo cáo thu giấy chứng nhận — 6 xã</title>
+<link rel="icon" href="data:,">
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#182942;background:#f1f5f9}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px;margin:0 0 8px}h2{font-size:19px}p{line-height:1.6;color:#596b80}button,input,a{font:inherit}button,.link{border:0;border-radius:8px;background:#1d4ed8;color:white;padding:11px 16px;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.55;cursor:wait}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:20px}.value{display:block;font-size:34px;font-weight:750;margin-top:8px}.green{color:#047857}.orange{color:#b45309}.muted{color:#596b80;font-size:14px}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:680px;text-align:left}th,td{padding:14px 12px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc;font-size:14px}td button{padding:6px 10px;background:#eef2ff;color:#1d4ed8}.error{color:#b91c1c}.tabs{display:flex;gap:8px;overflow:auto;padding:22px 0 12px}.tabs button{white-space:nowrap;background:#e2e8f0;color:#334155}.tabs button[aria-selected="true"]{background:#1d4ed8;color:white}input{width:100%;padding:12px;border:1px solid #bac7d8;border-radius:8px;margin:8px 0 12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.secondary{background:#e2e8f0;color:#334155}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}#tabDetails{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}#tabDetails strong{font-size:24px;display:block}#notice{min-height:24px}footer{margin:24px 0;color:#596b80;font-size:13px}@media(max-width:650px){main{padding:14px}header{align-items:flex-start;flex-direction:column}.cards{gap:8px}.card{padding:12px}.value{font-size:26px}h1{font-size:22px}}
+</style>
+<script src="./assets/report-dashboard.js"></script>
+</head>
+<body><main>
+<header><div><h1>Báo cáo thu giấy chứng nhận</h1><div class="muted">Theo dõi hồ sơ của 6 xã</div></div><button id="refreshAll">Cập nhật cả 6 xã</button></header>
+<p id="notice" role="status" aria-live="polite">Đang chuẩn bị báo cáo…</p>
+<div class="cards"><div class="card">Tổng hồ sơ<span class="value" id="total">—</span></div><div class="card">Đã có GCN<span class="value green" id="withGcn">—</span></div><div class="card">Chưa xử lý<span class="value orange" id="pending">—</span></div></div>
+<section aria-labelledby="overviewTitle"><h2 id="overviewTitle">Tổng hợp từng xã</h2><div class="table-wrap"><table><thead><tr><th>Xã</th><th>Tổng hồ sơ</th><th>Đã có GCN</th><th>Chưa xử lý</th><th>Lần cập nhật / kết nối</th></tr></thead><tbody id="summaryRows"></tbody></table></div></section>
+<nav id="tabs" class="tabs" role="tablist" aria-label="Báo cáo theo xã"></nav>
+<section id="panel" role="tabpanel"><h2 id="selectedName"></h2><p id="selectedStatus" role="status"></p><div id="tabDetails"></div>
+<details><summary>Cấu hình API riêng của xã</summary><label for="apiUrl">Web App URL</label><input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/.../exec"><button id="saveApi">Lưu API và đọc báo cáo</button><p class="muted">Cấu hình dùng chung với trang thu giấy của xã này trên cùng trình duyệt. Nếu trang thu giấy đang mở, tải lại trang đó sau khi đổi API.</p></details>
+<div class="actions" style="margin-top:18px"><button id="refreshSelected">Cập nhật xã này</button><a id="openApp" class="link secondary" target="_blank" rel="noopener">Mở trang thu giấy</a></div></section>
+<footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; API lỗi không được tính là 0.</footer>
+</main>
+<script>
+const PAGES = [{"id": "HamGiang", "name": "Hàm Giang", "file": "HamGiang.html", "key": "landApiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbyHj01dMvwTQ3rsly6jlMvkB5nwK4qOzNqUVjgFf6R86tEf7dDZeqf9Qj7qFWFrn9FP/exec"}, {"id": "TraCu", "name": "Trà Cú", "file": "TraCu.html", "key": "landScan:TraCu:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycby1nGc2_GmnJwmXjDMZUIMK2NQ43mB1xlh3VI06OUorJmOPs5hN-dFTDQZzWZabR4LB/exec"}, {"id": "LongHiep", "name": "Long Hiệp", "file": "LongHiep.html", "key": "landScan:LongHiep:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbyCqX2DXAwZp3WQVw5Yu56F6H6HWBKdtZqZdTuAIq5bND2hbmJrVsMtWVXSi3wp1Hdu/exec"}, {"id": "TapSon", "name": "Tập Sơn", "file": "TapSon.html", "key": "landScan:TapSon:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbxL1hw17g1NaRUwD8LR279O3OlLoiN-sVlZk_o8snjYDIQ34q4IOwW6U8cicLFwdjp5/exec"}, {"id": "LuuNghiepAnh", "name": "Lưu Nghiệp Anh", "file": "LuuNghiepAnh.html", "key": "landScan:LuuNghiepAnh:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbzWYWAXfeNTZrsjhPf3_SQG-oPGmMXwo5GsXSYaNvUqjEOwcWNPpTGAM05lur4_j6zV/exec"}, {"id": "DaiAn", "name": "Đại An", "file": "DaiAn.html", "key": "landScan:DaiAn:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbzMP_DZ6h_3Xc_r9eGSuukvt-i6xc7VdAtJQ8W-NSVknZtpHe1RF3E4EpF0zhyq6Lbdvw/exec"}];
+const states = PAGES.map(() => ({ status: 'idle', counts: null, error: '', at: null, version: 0 }));
+let selected = 0;
+const format = value => new Intl.NumberFormat('vi-VN').format(value);
+const el = id => document.getElementById(id);
+function apiFor(page) { const saved = localStorage.getItem(page.key); return saved === null ? page.defaultApi : saved; }
+function statusText(state) {
+  if (state.status === 'loading') return 'Đang đọc tất cả hồ sơ…';
+  if (state.status === 'error') return state.error;
+  if (state.status === 'ready') return 'Đã cập nhật ' + state.at.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+  return 'Chưa cập nhật';
+}
+function render() {
+  const valid = states.filter(s => s.status === 'ready');
+  for (const key of ['total', 'withGcn', 'pending']) el(key).textContent = valid.length ? format(valid.reduce((sum, s) => sum + s.counts[key], 0)) : '—';
+  const loading = states.filter(s => s.status === 'loading').length;
+  el('notice').textContent = `Đã đọc thành công ${valid.length}/6 xã.` + (loading ? ` Đang đọc ${loading} xã…` : valid.length < 6 ? ' Tổng chưa đầy đủ; kiểm tra kết nối bên dưới.' : ' Tổng hợp đủ 6 xã.');
+  el('refreshAll').disabled = loading > 0;
+  const tbody = el('summaryRows'); tbody.replaceChildren();
+  PAGES.forEach((page, index) => {
+    const state = states[index], tr = document.createElement('tr');
+    const name = document.createElement('td'), button = document.createElement('button');
+    button.textContent = page.name; button.onclick = () => selectTab(index); name.append(button); tr.append(name);
+    for (const key of ['total', 'withGcn', 'pending']) { const td = document.createElement('td'); td.textContent = state.status === 'ready' ? format(state.counts[key]) : '—'; tr.append(td); }
+    const status = document.createElement('td'); status.textContent = statusText(state); if (state.status === 'error') status.className = 'error'; tr.append(status); tbody.append(tr);
+  });
+  renderSelected();
+}
+function renderSelected() {
+  const page = PAGES[selected], state = states[selected];
+  el('selectedName').textContent = page.name;
+  el('selectedStatus').textContent = statusText(state);
+  el('selectedStatus').className = state.status === 'error' ? 'error' : 'muted';
+  el('refreshSelected').disabled = state.status === 'loading';
+  el('tabDetails').replaceChildren();
+  for (const [key, label] of [['total','Tổng hồ sơ'], ['withGcn','Đã có GCN'], ['pending','Chưa xử lý']]) {
+    const box = document.createElement('div'), value = document.createElement('strong');
+    box.textContent = label; value.textContent = state.status === 'ready' ? format(state.counts[key]) : '—'; box.append(value); el('tabDetails').append(box);
+  }
+  el('openApp').href = page.file;
+}
+function selectTab(index) {
+  selected = index;
+  [...el('tabs').children].forEach((tab, i) => { tab.setAttribute('aria-selected', String(i === index)); tab.tabIndex = i === index ? 0 : -1; });
+  el('panel').setAttribute('aria-labelledby', 'tab-' + PAGES[index].id);
+  el('apiUrl').value = apiFor(PAGES[index]); renderSelected();
+}
+async function refresh(index) {
+  const page = PAGES[index], state = states[index], version = ++state.version;
+  state.status = 'loading'; state.counts = null; state.error = ''; render();
+  try {
+    const api = apiFor(page).trim();
+    if (!api) throw new Error('Chưa cấu hình API cho ' + page.name);
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(api)) throw new Error('Nhập URL triển khai Apps Script kết thúc bằng /exec.');
+    const counts = await LandReports.loadReport(api);
+    if (version !== state.version) return;
+    state.counts = counts; state.status = 'ready'; state.at = new Date();
+  } catch (error) {
+    if (version !== state.version) return;
+    state.status = 'error'; state.error = error.name === 'AbortError' ? 'API quá thời gian chờ; thử cập nhật lại.' : error.message;
+  }
+  render();
+}
+PAGES.forEach((page, index) => {
+  const tab = document.createElement('button'); tab.id = 'tab-' + page.id; tab.textContent = page.name; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', 'panel');
+  tab.onclick = () => selectTab(index);
+  tab.onkeydown = event => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % 6;
+    if (event.key === 'ArrowLeft') next = (index + 5) % 6;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = 5;
+    if (next !== undefined) { event.preventDefault(); selectTab(next); el('tabs').children[next].focus(); }
+  };
+  el('tabs').append(tab);
+});
+el('refreshAll').onclick = () => Promise.all(PAGES.map((_, i) => refresh(i)));
+el('refreshSelected').onclick = () => refresh(selected);
+el('saveApi').onclick = () => { localStorage.setItem(PAGES[selected].key, el('apiUrl').value.trim()); refresh(selected); };
+window.addEventListener('storage', event => {
+  const index = PAGES.findIndex(page => page.key === event.key);
+  if (index >= 0) { if (index === selected) el('apiUrl').value = apiFor(PAGES[index]); refresh(index); }
+});
+selectTab(0); render(); Promise.all(PAGES.map((_, i) => refresh(i)));
+</script></body></html>
