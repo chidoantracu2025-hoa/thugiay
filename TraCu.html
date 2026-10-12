@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Quản Lý Đất Đai Mobile</title>
+  <title>Quản Lý Đất Đai — Trà Cú</title>
   <link rel="icon" href="data:," />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="./assets/vendor/jspdf.umd.min.js"></script>
+  <script src="./assets/vendor/tesseract/tesseract.min.js"></script>
   <script src="./opencv.js"></script>
   <script src="./jscanify.min.js"></script>
   <style>
@@ -312,7 +312,7 @@
 <body>
   <div class="app">
     <div class="topbar">
-      <div class="brand">Quản Lý Đất Đai Mobile</div>
+      <div class="brand">Quản Lý Đất Đai — Trà Cú</div>
       <div id="statusBadge" class="badge">Sẵn sàng</div>
     </div>
 
@@ -322,7 +322,7 @@
           <summary>Cấu hình kết nối API</summary>
           <div class="field">
             <label for="webAppUrl">Web App URL</label>
-            <input id="webAppUrl" type="text" value="https://script.google.com/macros/s/AKfycby1nGc2_GmnJwmXjDMZUIMK2NQ43mB1xlh3VI06OUorJmOPs5hN-dFTDQZzWZabR4LB/exec" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveApiUrl()" />
+            <input id="webAppUrl" type="text" value="" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveApiUrl()" />
           </div>
           <div class="footer-actions mt-8">
             <button class="secondary" type="button" onclick="testApiConnection()">Kiểm tra API</button>
@@ -349,6 +349,17 @@
             <div class="field">
               <label>Số thứ tự thửa mới</label>
               <input id="searchPlot" type="text" inputmode="text" placeholder="Số thửa mới" />
+            </div>
+          </div>
+          <!-- BỔ SUNG THÊM 2 MỤC TÌM KIẾM TỜ/THỬA CŨ -->
+          <div class="grid-2">
+            <div class="field">
+              <label>Số hiệu tờ bản đồ cũ</label>
+              <input id="searchMapSheetOld" type="text" inputmode="text" placeholder="Số tờ cũ" />
+            </div>
+            <div class="field">
+              <label>Số thứ tự thửa cũ</label>
+              <input id="searchPlotOld" type="text" inputmode="text" placeholder="Số thửa cũ" />
             </div>
           </div>
         </div>
@@ -408,7 +419,7 @@
           </select>
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
           <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files)" />
-          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Ảnh CCCD sẽ được lưu trong PDF CCCD riêng.</div>
+          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF tối đa 200 dpi theo ảnh nguồn.</div>
         </div>
 
         <div class="mini-grid mt-8">
@@ -445,7 +456,7 @@
           <div class="grid-2">
             <div class="field">
               <label>Tên xã mới</label>
-              <input id="tenXaMoi" type="text" placeholder="Tên xã mới" value="Xã Trà Cú"/>
+              <input id="tenXaMoi" type="text" placeholder="Tên xã mới" value="Xã Hàm Giang"/>
             </div>
             <div class="field">
               <label>Họ và tên CSD</label>
@@ -529,6 +540,13 @@
   </div>
 
   <script>
+    // Settings belong to this page; scan data and Workers belong to this tab.
+    const PAGE_STORAGE_PREFIX = 'landScan:TraCu:';
+    const PAGE_STORAGE_KEYS = {
+      apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl',
+      scanMode: PAGE_STORAGE_PREFIX + 'scanMode'
+    };
+
     const state = {
       stream: null,
       documentPages: [],
@@ -541,7 +559,7 @@
       pendingRetakeId: null,
       colorCheckFrame: 0,
       grayscaleSamples: 0,
-      scanMode: localStorage.getItem('TraCulandScanMode') || 'opencv'
+      scanMode: localStorage.getItem(PAGE_STORAGE_KEYS.scanMode) || 'opencv'
     };
 
     const opencvReady = Promise.resolve(window.cv).then(module => {
@@ -556,19 +574,130 @@
       return false;
     });
 
+    let scanWorker = null;
+    let scanRequestId = 0;
+    const scanRequests = new Map();
+    if (typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function') {
+      try {
+        scanWorker = new Worker('./assets/document-scan-worker.js');
+        scanWorker.onmessage = ({ data }) => {
+          const pending = scanRequests.get(data.id);
+          if (!pending) { if (data.bitmap) data.bitmap.close(); return; }
+          clearTimeout(pending.timer);
+          scanRequests.delete(data.id);
+          if (data.error) { pending.resolve(null); return; }
+          const canvas = document.createElement('canvas');
+          canvas.width = data.bitmap.width;
+          canvas.height = data.bitmap.height;
+          canvas.getContext('2d').drawImage(data.bitmap, 0, 0);
+          data.bitmap.close();
+          pending.resolve({ canvas, detected: data.detected, method: data.method });
+        };
+        scanWorker.onerror = () => {
+          scanWorker.terminate();
+          scanWorker = null;
+          for (const pending of scanRequests.values()) {
+            clearTimeout(pending.timer);
+            pending.resolve(null);
+          }
+          scanRequests.clear();
+        };
+      } catch (error) { console.info('Scan Worker không khả dụng.', error); }
+    }
+
+    async function prepareScanAsync(source, options) {
+      await yieldToInterface();
+      if (scanWorker) {
+        const bitmap = await createImageBitmap(source);
+        const id = ++scanRequestId;
+        const result = await new Promise(resolve => {
+          const timer = setTimeout(() => {
+            scanRequests.delete(id);
+            // Stop stalled work before using the compatibility path.
+            if (scanWorker) scanWorker.terminate();
+            scanWorker = null;
+            for (const pending of scanRequests.values()) {
+              clearTimeout(pending.timer);
+              pending.resolve(null);
+            }
+            scanRequests.clear();
+            resolve(null);
+          }, 30000);
+          scanRequests.set(id, { resolve, timer });
+          scanWorker.postMessage({ id, bitmap, options, mode: state.scanMode }, [bitmap]);
+        });
+        if (result) return result;
+      }
+      await opencvReady;
+      return prepareScan(source, options);
+    }
+
+    const PDF_DPI = 200;
     let cccdOcrWorker = null;
+    let cccdOcrWorkerPromise = null;
+    let identityQueue = Promise.resolve();
+    let identityGeneration = 0;
+    let qrRequestId = 0;
+    const qrRequests = new Map();
+    let qrWorker = null;
+    try {
+      qrWorker = new Worker('./assets/cccd-qr-worker.js');
+      qrWorker.onmessage = ({ data }) => {
+        const pending = qrRequests.get(data.id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        qrRequests.delete(data.id);
+        pending.resolve(data.number || '');
+      };
+      qrWorker.onerror = () => {
+        qrWorker.terminate();
+        qrWorker = null;
+        for (const pending of qrRequests.values()) {
+          clearTimeout(pending.timer);
+          pending.resolve('');
+        }
+        qrRequests.clear();
+      };
+    } catch (error) { console.info('QR Worker không khả dụng.', error); }
+
+    function yieldToInterface() {
+      return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    async function readCccdQr(canvas, half = null) {
+      if (!qrWorker) return '';
+      const sourceX = half === 'right' ? Math.floor(canvas.width * 0.4) : 0;
+      const sourceWidth = half ? Math.ceil(canvas.width * 0.6) : canvas.width;
+      const scale = Math.min(1, 2200 / Math.max(sourceWidth, canvas.height));
+      const probe = document.createElement('canvas');
+      probe.width = Math.max(1, Math.round(sourceWidth * scale));
+      probe.height = Math.max(1, Math.round(canvas.height * scale));
+      const ctx = probe.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(canvas, sourceX, 0, sourceWidth, canvas.height, 0, 0, probe.width, probe.height);
+      const pixels = ctx.getImageData(0, 0, probe.width, probe.height);
+      const id = ++qrRequestId;
+      return new Promise(resolve => {
+        const timer = setTimeout(() => {
+          qrRequests.delete(id);
+          resolve('');
+        }, 15000);
+        qrRequests.set(id, { resolve, timer });
+        qrWorker.postMessage({ id, width: probe.width, height: probe.height, buffer: pixels.data.buffer }, [pixels.data.buffer]);
+      });
+    }
+
     const apiUrlInput = document.getElementById('webAppUrl');
-    apiUrlInput.value = localStorage.getItem('TraCulandApiUrl') || apiUrlInput.value;
+    apiUrlInput.value = localStorage.getItem(PAGE_STORAGE_KEYS.apiUrl) || apiUrlInput.value;
 
     function saveApiUrl() {
-      localStorage.setItem('TraCulandApiUrl', document.getElementById('webAppUrl').value.trim());
+      localStorage.setItem(PAGE_STORAGE_KEYS.apiUrl, document.getElementById('webAppUrl').value.trim());
     }
 
     document.getElementById('scanMode').value = ['opencv', 'fallback', 'all'].includes(state.scanMode) ? state.scanMode : 'opencv';
 
     function setScanMode(mode) {
       state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
-      localStorage.setItem('TraCulandScanMode', state.scanMode);
+      localStorage.setItem(PAGE_STORAGE_KEYS.scanMode, state.scanMode);
       setStatus(`Đã chọn căn chỉnh: ${state.scanMode === 'opencv' ? 'OpenCV' : state.scanMode === 'fallback' ? 'Dự phòng' : 'Tất cả'}`, 'success');
     }
 
@@ -642,14 +771,25 @@
       }
     }
 
+    // BỔ SUNG LẤY DỮ LIỆU TỜ/THỬA CỦ ĐỂ GỬI QUA API SEARCH
     async function searchRecords() {
       const query = document.getElementById('searchQuery').value.trim();
       const name = document.getElementById('searchName').value.trim();
       const soHieuToBanDoMoi = document.getElementById('searchMapSheet').value.trim();
       const soThuTuThuaMoi = document.getElementById('searchPlot').value.trim();
+      const soHieuToBanDoCu = document.getElementById('searchMapSheetOld').value.trim();
+      const soThuTuThuaCu = document.getElementById('searchPlotOld').value.trim();
       try {
         setStatus('Đang tìm kiếm...', 'normal');
-        const data = await apiRequest('SEARCH', { query, name, soHieuToBanDoMoi, soThuTuThuaMoi, limit: 20 });
+        const data = await apiRequest('SEARCH', { 
+          query, 
+          name, 
+          soHieuToBanDoMoi, 
+          soThuTuThuaMoi,
+          soHieuToBanDoCu,
+          soThuTuThuaCu,
+          limit: 20 
+        });
         renderSearchResults(data.data || []);
         setStatus(data.data && data.data.length ? 'Tìm thấy dữ liệu' : 'Không có dữ liệu', data.data && data.data.length ? 'success' : 'normal');
       } catch (error) {
@@ -688,6 +828,7 @@
     }
 
     function fillFormFromResult(item) {
+      identityGeneration++;
       const values = {
         tenHuyen: item['Tên huyện'] || item.tenHuyen || '',
         tenXaCu: item['Tên xã cũ'] || item.tenXaCu || '',
@@ -881,80 +1022,191 @@
     }
 
     async function capturePage(type) {
-      const video = document.getElementById('video');
-      if (!video || !video.videoWidth) {
-        alert('Camera chưa sẵn sàng.');
-        return;
-      }
-
-      const canvas = document.getElementById('scanCanvas');
-      const pendingItem = state.pendingRetakeId
-        ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId)
-        : null;
-      const captureType = pendingItem ? pendingItem.type : type;
-      const track = state.stream && state.stream.getVideoTracks()[0];
-      let photoBitmap = null;
-      if (track && 'ImageCapture' in window) {
-        try {
-          const photo = await new ImageCapture(track).takePhoto();
-          photoBitmap = await createImageBitmap(photo);
-        } catch (captureError) {
-          console.info('Ảnh tĩnh độ phân giải cao không khả dụng, dùng khung camera hiện tại.', captureError);
+      if (state.processing || state.saving) return;
+      state.processing = true;
+      try {
+        const video = document.getElementById('video');
+        if (!video || !video.videoWidth) {
+          alert('Camera chưa sẵn sàng.');
+          return;
         }
-      }
 
-      const source = photoBitmap || video;
-      canvas.width = source.width || source.videoWidth || 1280;
-      canvas.height = source.height || source.videoHeight || 720;
-      canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
-      if (photoBitmap && photoBitmap.close) photoBitmap.close();
+        const canvas = document.getElementById('scanCanvas');
+        const pendingItem = state.pendingRetakeId
+          ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId)
+          : null;
+        const captureType = pendingItem ? pendingItem.type : type;
+        const track = state.stream && state.stream.getVideoTracks()[0];
+        let photoBitmap = null;
+        if (track && 'ImageCapture' in window) {
+          try {
+            const photo = await new ImageCapture(track).takePhoto();
+            photoBitmap = await createImageBitmap(photo);
+          } catch (captureError) {
+            console.info('Ảnh tĩnh độ phân giải cao không khả dụng, dùng khung camera hiện tại.', captureError);
+          }
+        }
 
-      const originalCanvas = document.createElement('canvas');
-      originalCanvas.width = canvas.width;
-      originalCanvas.height = canvas.height;
-      originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
-      const scan = prepareScan(canvas, { targetLongEdge: 3000, preferSpread: captureType === 'document' });
-      const item = {
-        id: state.pendingRetakeId || createScanId(),
-        type: captureType,
-        canvas: scan.canvas,
-        originalCanvas,
-        fileName: captureType === 'document' ? 'Ảnh chụp' : (captureType === 'cccd-front' ? 'CCCD mặt trước' : 'CCCD mặt sau'),
-        detected: scan.detected,
-        method: scan.method
-      };
+        const source = photoBitmap || video;
+        canvas.width = source.width || source.videoWidth || 1280;
+        canvas.height = source.height || source.videoHeight || 720;
+        canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+        if (photoBitmap && photoBitmap.close) photoBitmap.close();
 
-      if (state.pendingRetakeId) {
-        replaceScanItem(item);
-        state.pendingRetakeId = null;
-        setStatus(scan.detected ? 'Đã chụp lại và thay ảnh tại vị trí cũ' : 'Đã thay ảnh tại vị trí cũ (mép chưa nhận diện)', scan.detected ? 'success' : 'normal');
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = canvas.width;
+        originalCanvas.height = canvas.height;
+        originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
+        const scan = await prepareScanAsync(canvas, { targetLongEdge: captureType === 'document' ? 3308 : 1800, documentType: captureType, preferSpread: captureType === 'document' });
+        const item = {
+          id: state.pendingRetakeId || createScanId(),
+          type: captureType,
+          canvas: scan.canvas,
+          originalCanvas,
+          fileName: captureType === 'document' ? 'Ảnh chụp' : (captureType === 'cccd-front' ? 'CCCD mặt trước' : 'CCCD mặt sau'),
+          detected: scan.detected,
+          method: scan.method
+        };
+
+        if (state.pendingRetakeId) {
+          replaceScanItem(item);
+          state.pendingRetakeId = null;
+          setStatus(scan.detected ? 'Đã chụp lại và thay ảnh tại vị trí cũ' : 'Đã thay ảnh tại vị trí cũ (mép chưa nhận diện)', scan.detected ? 'success' : 'normal');
+          if (captureType === 'cccd-front') autoReadCccdNumber(item);
+          return;
+        }
+
+        addScanItem(item);
+        setStatus(scan.detected ? 'Đã nhận diện và cắt tài liệu' : 'Đã chụp ảnh (không nhận diện được mép)', scan.detected ? 'success' : 'normal');
         if (captureType === 'cccd-front') autoReadCccdNumber(item);
-        return;
+      } finally {
+        state.processing = false;
       }
-
-      addScanItem(item);
-      setStatus(scan.detected ? 'Đã nhận diện và cắt tài liệu' : 'Đã chụp ảnh (không nhận diện được mép)', scan.detected ? 'success' : 'normal');
-      if (captureType === 'cccd-front') autoReadCccdNumber(item);
     }
 
-    async function autoReadCccdNumber(item) {
-      try {
-        if (!window.Tesseract) throw new Error('Thư viện OCR chưa tải được.');
-        setStatus('Đang đọc số CCCD trên thiết bị...', 'normal');
-        if (!cccdOcrWorker) cccdOcrWorker = await window.Tesseract.createWorker('eng');
-        const result = await cccdOcrWorker.recognize(item.canvas);
-        const candidates = String(result.data.text || '').match(/(?:\d[\s.-]*){12}/g) || [];
-        const number = candidates.map(value => value.replace(/\D/g, '')).find(value => value.length === 12);
-        if (number) {
-          document.getElementById('soCCCD').value = number;
-          setStatus('Đã tự điền số CCCD', 'success');
-        } else {
-          setStatus('Chưa đọc được số CCCD; vui lòng nhập kiểm tra', 'normal');
+    function extractConfidentCccdNumber(data) {
+      const candidates = new Set();
+      const collect = (text, confidence) => {
+        if (Number(confidence) < 70 || !Number.isFinite(Number(confidence))) return;
+        // Reject entire longer numeric runs; never take 12 digits out of 13+.
+        for (const run of String(text || '').match(/\d(?:[ .-]*\d)*/g) || []) {
+          const digits = run.replace(/\D/g, '');
+          if (digits.length === 12) candidates.add(digits);
         }
-      } catch (error) {
-        console.info('Không thể nhận dạng số CCCD tự động.', error);
-        setStatus('OCR CCCD không khả dụng; vui lòng nhập số thủ công', 'normal');
+      };
+      for (const word of data.words || []) collect(word.text, word.confidence);
+      for (const line of data.lines || []) collect(line.text, line.confidence);
+      if (!candidates.size) collect(data.text, data.confidence);
+      return candidates.size === 1 ? [...candidates][0] : '';
+    }
+
+    function prepareCccdOcrImage(canvas, rotation = 0, cropNumberArea = false) {
+      const oriented = document.createElement('canvas');
+      const sideways = rotation === 90 || rotation === 270;
+      oriented.width = sideways ? canvas.height : canvas.width;
+      oriented.height = sideways ? canvas.width : canvas.height;
+      const ctx = oriented.getContext('2d', { willReadFrequently: true });
+      ctx.translate(oriented.width / 2, oriented.height / 2);
+      ctx.rotate(rotation * Math.PI / 180);
+      ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+      // Broad right-hand region on landscape cards: exclude the portrait,
+      // keep both old and newer front layouts. Full-card pass always comes first.
+      const x = cropNumberArea ? Math.floor(oriented.width * 0.28) : 0;
+      const width = oriented.width - x;
+      const image = document.createElement('canvas');
+      const scale = Math.min(2, 2400 / width);
+      const border = 16;
+      image.width = Math.round(width * scale) + border * 2;
+      image.height = Math.round(oriented.height * scale) + border * 2;
+      const context = image.getContext('2d', { willReadFrequently: true });
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, image.width, image.height);
+      context.drawImage(oriented, x, 0, width, oriented.height,
+        border, border, image.width - border * 2, image.height - border * 2);
+      const pixels = context.getImageData(0, 0, image.width, image.height);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        const gray = 0.299 * pixels.data[i] + 0.587 * pixels.data[i + 1] + 0.114 * pixels.data[i + 2];
+        const value = Math.max(0, Math.min(255, (gray - 128) * 1.55 + 155));
+        pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = value;
       }
+      context.putImageData(pixels, 0, 0);
+      oriented.width = oriented.height = 1;
+      return image;
+    }
+
+    function autoReadCccdNumber(item) {
+      const generation = identityGeneration;
+      const initialValue = document.getElementById('soCCCD').value;
+      const isCurrent = () => generation === identityGeneration &&
+        state.cccdPhotos.some(photo => photo.id === item.id && photo === item);
+      const task = async () => {
+        if (!isCurrent()) return;
+        try {
+          setStatus('Đang đọc mã QR CCCD trên thiết bị...', 'normal');
+          let number = await readCccdQr(item.originalCanvas || item.canvas);
+          if (!number && isCurrent()) number = await readCccdQr(item.canvas);
+          for (const half of ['right', 'left']) {
+            if (number || !isCurrent()) break;
+            // Read original detail before reducing a wide photo to a single probe.
+            number = await readCccdQr(item.originalCanvas || item.canvas, half);
+          }
+          let source = 'QR';
+          if (!number && isCurrent()) {
+            source = 'OCR';
+            if (!window.Tesseract) throw new Error('Thư viện OCR chưa tải được.');
+            setStatus('QR chưa đọc được; đang đọc số CCCD bằng OCR...', 'normal');
+            if (!cccdOcrWorkerPromise) {
+              cccdOcrWorkerPromise = window.Tesseract.createWorker('eng', 1, {
+                workerPath: new URL('./assets/vendor/tesseract/worker.min.js', location.href).href,
+                corePath: new URL('./assets/vendor/tesseract/core/', location.href).href,
+                langPath: new URL('./assets/vendor/tesseract/lang/', location.href).href
+              }).catch(error => { cccdOcrWorkerPromise = null; throw error; });
+            }
+            cccdOcrWorker = await cccdOcrWorkerPromise;
+            await cccdOcrWorker.setParameters({ tessedit_pageseg_mode: '11' });
+            const result = await cccdOcrWorker.recognize(item.canvas);
+            number = extractConfidentCccdNumber(result.data);
+            if (!number && isCurrent()) {
+              // Read digits independently of Vietnamese labels and background patterns.
+              await cccdOcrWorker.setParameters({
+                tessedit_pageseg_mode: '11', tessedit_char_whitelist: '0123456789'
+              });
+              try {
+                const rotations = item.canvas.width >= item.canvas.height ? [0, 180] : [90, 270];
+                for (const rotation of rotations) {
+                  if (number || !isCurrent()) break;
+                  setStatus('Đang đọc vùng số CCCD và kiểm tra chiều ảnh...', 'normal');
+                  const prepared = prepareCccdOcrImage(item.canvas, rotation, true);
+                  try {
+                    const digits = await cccdOcrWorker.recognize(prepared);
+                    number = extractConfidentCccdNumber(digits.data);
+                  } finally {
+                    prepared.width = prepared.height = 1;
+                  }
+                  await yieldToInterface();
+                }
+              } finally {
+                await cccdOcrWorker.setParameters({ tessedit_char_whitelist: '' });
+              }
+            }
+          }
+          if (!isCurrent()) return;
+          const input = document.getElementById('soCCCD');
+          if (number && input.value === initialValue && (!input.value || input.value === number)) {
+            input.value = number;
+            setStatus(`Đã đọc số CCCD bằng ${source}; vui lòng kiểm tra trước khi lưu`, 'success');
+          } else if (number && input.value !== number) {
+            setStatus('Số đọc được khác số đã nhập; vui lòng kiểm tra CCCD', 'normal');
+          } else {
+            setStatus('Chưa đọc chắc chắn số CCCD; chụp rõ QR hoặc nhập thủ công', 'normal');
+          }
+        } catch (error) {
+          console.info('Không thể đọc CCCD trên thiết bị.', error);
+          if (isCurrent()) setStatus('Chưa đọc được CCCD; vui lòng nhập số thủ công', 'normal');
+        }
+      };
+      identityQueue = identityQueue.then(task, task);
+      return identityQueue;
     }
 
     function renderFileBadges(item) {
@@ -983,52 +1235,62 @@
     }
 
     async function processImageFiles(fileList) {
-      const files = Array.from(fileList || []).filter(file => file.type && file.type.indexOf('image/') === 0);
-      if (!files.length) return;
-
-      setStatus('Đang xử lý ảnh được chọn...', 'normal');
+      if (state.processing || state.saving) return;
+      state.processing = true;
       try {
-        const filesToProcess = state.pendingRetakeId ? files.slice(0, 1) : files;
-        for (const file of filesToProcess) {
-          const sourceBitmap = await decodeImageFile(file);
-          try {
-            const sourceCanvas = document.createElement('canvas');
-            sourceCanvas.width = sourceBitmap.width;
-            sourceCanvas.height = sourceBitmap.height;
-            sourceCanvas.getContext('2d').drawImage(sourceBitmap, 0, 0);
+        const files = Array.from(fileList || []).filter(file => file.type && file.type.indexOf('image/') === 0);
+        if (!files.length) return;
 
-            const pendingItem = state.pendingRetakeId
-              ? [...state.documentPages, ...state.cccdPhotos].find(existing => existing.id === state.pendingRetakeId)
-              : null;
-            const itemType = pendingItem ? pendingItem.type : document.getElementById('imageUploadType').value;
-            const scan = prepareScan(sourceCanvas, { targetLongEdge: 3000, preferSpread: itemType === 'document' });
-            const item = {
-              id: state.pendingRetakeId || createScanId(),
-              type: itemType,
-              canvas: scan.canvas,
-              originalCanvas: sourceCanvas,
-              fileName: file.name,
-              detected: scan.detected,
-              method: scan.method
-            };
-            if (state.pendingRetakeId) {
-              replaceScanItem(item);
-              state.pendingRetakeId = null;
-            } else {
-              addScanItem(item);
+        setStatus('Đang xử lý ảnh được chọn...', 'normal');
+        try {
+          const filesToProcess = state.pendingRetakeId ? files.slice(0, 1) : files;
+          for (const file of filesToProcess) {
+            const sourceBitmap = await decodeImageFile(file);
+            try {
+              const sourceCanvas = document.createElement('canvas');
+              sourceCanvas.width = sourceBitmap.width;
+              sourceCanvas.height = sourceBitmap.height;
+              sourceCanvas.getContext('2d').drawImage(sourceBitmap, 0, 0);
+
+              const pendingItem = state.pendingRetakeId
+                ? [...state.documentPages, ...state.cccdPhotos].find(existing => existing.id === state.pendingRetakeId)
+                : null;
+              const itemType = pendingItem ? pendingItem.type : document.getElementById('imageUploadType').value;
+              const scan = await prepareScanAsync(sourceCanvas, { targetLongEdge: itemType === 'document' ? 3308 : 1800, documentType: itemType, preferSpread: itemType === 'document' });
+              const item = {
+                id: state.pendingRetakeId || createScanId(),
+                type: itemType,
+                canvas: scan.canvas,
+                originalCanvas: sourceCanvas,
+                fileName: file.name,
+                detected: scan.detected,
+                method: scan.method
+              };
+              if (state.pendingRetakeId) {
+                replaceScanItem(item);
+                state.pendingRetakeId = null;
+              } else {
+                addScanItem(item);
+              }
+              if (itemType === 'cccd-front') autoReadCccdNumber(item);
+            } finally {
+              if (sourceBitmap.close) sourceBitmap.close();
             }
-            if (itemType === 'cccd-front') autoReadCccdNumber(item);
-          } finally {
-            if (sourceBitmap.close) sourceBitmap.close();
           }
-        }
 
-        setStatus(state.pendingRetakeId ? 'Đã thay ảnh tại vị trí cũ' : `Đã xử lý ${filesToProcess.length} ảnh`, 'success');
-      } catch (error) {
-        alert('Không xử lý được ảnh: ' + error.message);
-        setStatus('Lỗi xử lý ảnh', 'error');
+          setStatus(`Đã xử lý ${filesToProcess.length} ảnh`, 'success');
+          await identityQueue;
+          if (document.getElementById('imageUploadType').value === 'document') {
+            setStatus('Đã xử lý ảnh GCN. Nếu đây là CCCD, hãy chọn CCCD mặt trước rồi tải lại ảnh để đọc số.', 'normal');
+          }
+        } catch (error) {
+          alert('Không xử lý được ảnh: ' + error.message);
+          setStatus('Lỗi xử lý ảnh', 'error');
+        } finally {
+          document.getElementById('imageFiles').value = '';
+        }
       } finally {
-        document.getElementById('imageFiles').value = '';
+        state.processing = false;
       }
     }
 
@@ -1074,6 +1336,7 @@
     function scanCameraPreview() {
       if (!state.stream) return;
       state.detectionFrame = setTimeout(scanCameraPreview, 1200);
+      if (state.processing || state.saving) return;
 
       const video = document.getElementById('video');
       if (!video.videoWidth || !video.videoHeight) return;
@@ -1254,7 +1517,7 @@
         const openCvBounds = detectDocumentWithOpenCv(sourceCanvas, false, options);
         if (openCvBounds) candidates.push(openCvBounds);
       }
-      const jscanifyBounds = detectDocumentWithJscanify(sourceCanvas);
+      const jscanifyBounds = mode === 'all' ? detectDocumentWithJscanify(sourceCanvas) : null;
       if (jscanifyBounds) candidates.push(jscanifyBounds);
       const colorBounds = detectDocumentByColorFallback(sourceCanvas);
       if (colorBounds) candidates.push(colorBounds);
@@ -1270,11 +1533,16 @@
 
     function scoreDocumentBounds(bounds, sourceCanvas, options = {}) {
       if (!bounds) return -1;
-      const boxArea = bounds.width * bounds.height;
+      const boxArea = bounds.corners
+        ? Math.abs(bounds.corners.reduce((sum, point, index, points) => {
+          const next = points[(index + 1) % points.length];
+          return sum + point.x * next.y - next.x * point.y;
+        }, 0)) / 2
+        : bounds.width * bounds.height;
       const frameArea = sourceCanvas.width * sourceCanvas.height;
       const areaRatio = boxArea / frameArea;
       const aspect = Math.max(bounds.width, bounds.height) / Math.max(1, Math.min(bounds.width, bounds.height));
-      const aspectFit = Math.exp(-Math.abs(Math.log(aspect / Math.SQRT2)));
+      const aspectFit = Math.exp(-Math.abs(Math.log(aspect / (options.documentType && options.documentType.startsWith('cccd') ? 1.586 : Math.SQRT2))));
       let score = areaRatio * (0.7 + 0.3 * aspectFit);
       score += bounds.corners ? 0.025 : 0;
       score += bounds.method === 'opencv' ? 0.015 : bounds.method === 'jscanify' ? 0.01 : 0;
@@ -1371,8 +1639,8 @@
         right < probeW * 0.995 && bottom < probeH * 0.995;
 
       if (!valid) {
-        const marginX = Math.round(sourceW * 0.03);
-        const marginY = Math.round(sourceH * 0.03);
+        const marginX = 0;
+        const marginY = 0;
         return { x: marginX, y: marginY, width: sourceW - marginX * 2, height: sourceH - marginY * 2, detected: false, method: 'fallback' };
       }
 
@@ -1838,97 +2106,62 @@
       }
     }
 
-    function buildPdfFromScans(scans, options = {}) {
-      const pages = scans.map(item => item.canvas);
+    function preparePdfImage(canvas, pageWidth, pageHeight, quality = 0.84) {
+      const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
+      const widthMm = canvas.width * ratio;
+      const heightMm = canvas.height * ratio;
+      // Only downsample: 200 dpi is a ceiling, never invent missing source detail.
+      const scale = Math.min(1, widthMm / 25.4 * PDF_DPI / canvas.width,
+        heightMm / 25.4 * PDF_DPI / canvas.height);
+      const image = document.createElement('canvas');
+      image.width = Math.max(1, Math.floor(canvas.width * scale));
+      image.height = Math.max(1, Math.floor(canvas.height * scale));
+      const context = image.getContext('2d');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, image.width, image.height);
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(canvas, 0, 0, image.width, image.height);
+      const data = image.toDataURL('image/jpeg', quality);
+      image.width = image.height = 1;
+      return { data, widthMm, heightMm };
+    }
 
-      if (!pages.length) {
-        throw new Error('Bạn chưa chụp tài liệu hoặc CCCD nào.');
-      }
-
+    async function createLocalPdf(scans, original = false, quality = 0.84) {
+      if (!scans.length) throw new Error('Không có ảnh để tạo PDF.');
       const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF({
-        orientation: options.orientation || 'portrait',
-        unit: 'mm',
-        format: options.format || 'a4'
-      });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-
-      pages.forEach((pageCanvas, index) => {
-        if (index > 0) pdf.addPage();
-
-        const imgData = pageCanvas.toDataURL('image/jpeg', 0.92);
-        const ratio = Math.min(pageWidth / pageCanvas.width, pageHeight / pageCanvas.height);
-        const w = pageCanvas.width * ratio;
-        const h = pageCanvas.height * ratio;
-        const x = (pageWidth - w) / 2;
-        const y = (pageHeight - h) / 2;
-
-        pdf.addImage(imgData, 'JPEG', x, y, w, h, undefined, 'FAST');
-      });
-
+      let pdf;
+      for (const item of scans) {
+        await yieldToInterface();
+        const canvas = original ? item.originalCanvas : item.canvas;
+        if (!canvas) throw new Error('Thiếu ảnh gốc để tạo bản sao dự phòng.');
+        const isDocument = item.type === 'document';
+        const format = isDocument ? 'a3' : 'a4';
+        const orientation = isDocument && canvas.width > canvas.height ? 'landscape' : 'portrait';
+        if (!pdf) pdf = new jsPDF({ orientation, unit: 'mm', format, compress: true });
+        else pdf.addPage(format, orientation);
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        // Keep cards at their physical size instead of enlarging them to fill A4.
+        const image = isDocument
+          ? preparePdfImage(canvas, pageWidth, pageHeight, quality)
+          : preparePdfImage(canvas, canvas.width >= canvas.height ? 85.6 : 53.98,
+              canvas.width >= canvas.height ? 53.98 : 85.6, quality);
+        pdf.addImage(image.data, 'JPEG', (pageWidth - image.widthMm) / 2,
+          (pageHeight - image.heightMm) / 2, image.widthMm, image.heightMm, undefined, 'FAST');
+      }
       return pdf.output('datauristring');
     }
 
-    function buildOriginalBackupPdf(scans, maxBytes = 3 * 1000 * 1000) {
-      if (!scans.length) throw new Error('Không có ảnh gốc để tạo bản sao dự phòng.');
-      if (scans.some(item => !item.originalCanvas)) {
-        throw new Error('Thiếu ảnh gốc của một trang; không thể tạo bản sao dự phòng đầy đủ.');
+    async function buildPdfFromScans(scans) {
+      return createLocalPdf(scans);
+    }
+
+    async function buildOriginalBackupPdf(scans, maxBytes = 3 * 1000 * 1000) {
+      for (const quality of [0.84, 0.76, 0.68]) {
+        const data = await createLocalPdf(scans, true, quality);
+        if (estimateDataUriBytes(data) < maxBytes) return data;
       }
-
-      const attempts = [
-        { maxEdge: 1800, quality: 0.76 },
-        { maxEdge: 1500, quality: 0.68 },
-        { maxEdge: 1250, quality: 0.6 },
-        { maxEdge: 1000, quality: 0.53 },
-        { maxEdge: 800, quality: 0.46 },
-        { maxEdge: 640, quality: 0.4 },
-        { maxEdge: 480, quality: 0.34 }
-      ];
-      const { jsPDF } = window.jspdf;
-
-      for (const attempt of attempts) {
-        let pdf = null;
-        scans.forEach((item, index) => {
-          const original = item.originalCanvas;
-          const scale = Math.min(1, attempt.maxEdge / Math.max(original.width, original.height));
-          const imageCanvas = document.createElement('canvas');
-          imageCanvas.width = Math.max(1, Math.round(original.width * scale));
-          imageCanvas.height = Math.max(1, Math.round(original.height * scale));
-          imageCanvas.getContext('2d').drawImage(original, 0, 0, imageCanvas.width, imageCanvas.height);
-
-          const isDocument = item.type === 'document';
-          const format = isDocument ? 'a3' : 'a4';
-          const orientation = imageCanvas.width >= imageCanvas.height * 1.08 ? 'landscape' : 'portrait';
-          if (!pdf) {
-            pdf = new jsPDF({ orientation, unit: 'mm', format, compress: true });
-          } else {
-            pdf.addPage(format, orientation);
-          }
-
-          const pageWidth = pdf.internal.pageSize.getWidth();
-          const pageHeight = pdf.internal.pageSize.getHeight();
-          const ratio = Math.min(pageWidth / imageCanvas.width, pageHeight / imageCanvas.height);
-          const width = imageCanvas.width * ratio;
-          const height = imageCanvas.height * ratio;
-          const imageData = imageCanvas.toDataURL('image/jpeg', attempt.quality);
-          pdf.addImage(
-            imageData,
-            'JPEG',
-            (pageWidth - width) / 2,
-            (pageHeight - height) / 2,
-            width,
-            height,
-            undefined,
-            'FAST'
-          );
-        });
-
-        const dataUri = pdf.output('datauristring');
-        if (estimateDataUriBytes(dataUri) < maxBytes) return dataUri;
-      }
-
-      throw new Error('Không thể nén bản sao dự phòng xuống dưới 3 MB. Hãy giảm số trang hoặc chọn ảnh gốc có độ phân giải thấp hơn.');
+      throw new Error('PDF 200 dpi vượt 3 MB. Hãy lưu ít trang hơn mỗi lần để giữ chi tiết.');
     }
 
     function estimateDataUriBytes(dataUri) {
@@ -1974,11 +2207,15 @@
         return saveNoteOnly();
       }
 
+      if (state.saving || state.processing) return;
+      state.saving = true;
+      document.getElementById('btnSaveRecord').disabled = true;
       try {
+        await identityQueue;
         setStatus('Đang tạo PDF và nén bản sao gốc...', 'normal');
         const allScans = [...state.documentPages, ...state.cccdPhotos];
         const originalBackupFileName = buildOriginalBackupFileName();
-        const pdfOriginalBase64 = buildOriginalBackupPdf(allScans);
+        const pdfOriginalBase64 = await buildOriginalBackupPdf(allScans);
 
         const payload = {
           tenHuyen: document.getElementById('tenHuyen').value.trim(),
@@ -2005,9 +2242,9 @@
           fileNameOriginal: originalBackupFileName,
           pdfOriginalBase64,
           pdfGCNBase64: state.documentPages.length
-            ? buildPdfFromScans(state.documentPages, { orientation: 'landscape', format: 'a3' })
+            ? await buildPdfFromScans(state.documentPages)
             : '',
-          pdfCCCDBase64: state.cccdPhotos.length ? buildPdfFromScans(state.cccdPhotos) : ''
+          pdfCCCDBase64: state.cccdPhotos.length ? await buildPdfFromScans(state.cccdPhotos) : ''
         };
 
         const result = await apiRequest('SAVE_SCAN', payload);
@@ -2017,7 +2254,7 @@
           if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
           if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
           renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
-          alert(`${result.message || 'Lưu thành công.'}\nPDF GCN và CCCD (nếu có) đã lưu riêng trên cùng hồ sơ.${result.originalBackupSaved ? '\nĐã lưu bản sao PDF gốc (chưa chỉnh sửa), ghép tất cả ảnh và dưới 3 MB.' : ''}${result.warning ? `\n${result.warning}` : ''}`);
+          alert(`${result.message || 'Lưu thành công.'}\nPDF GCN và CCCD (nếu có) đã lưu riêng trên cùng hồ sơ.${result.originalBackupSaved ? '\nĐã lưu bản sao trước căn chỉnh, nén tối đa 200 dpi và dưới 3 MB.' : ''}${result.warning ? `\n${result.warning}` : ''}`);
         } else {
           alert(result.message || 'Lưu thông tin lên Google Sheet thành công.');
         }
@@ -2028,6 +2265,9 @@
       } catch (error) {
         alert('Lỗi khi lưu PDF: ' + error.message);
         setStatus('Lưu lỗi', 'error');
+      } finally {
+        state.saving = false;
+        document.getElementById('btnSaveRecord').disabled = false;
       }
     }
 
@@ -2051,7 +2291,8 @@
     }
 
     function clearForm() {
-      ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText']
+      identityGeneration++;
+      ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText','searchMapSheetOld','searchPlotOld']
         .forEach(id => { const node = document.getElementById(id); if (node) node.value = ''; });
 
       state.documentPages = [];
