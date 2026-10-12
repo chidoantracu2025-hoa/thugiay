@@ -33,6 +33,15 @@ class PDF {
 const context = vm.createContext({ document: { createElement: canvas }, window: { jspdf: { jsPDF: PDF } },
   PDF_DPI: 200, yieldToInterface: () => Promise.resolve() });
 vm.runInContext(functionCode('preparePdfImage') + '\n' + functionCode('createLocalPdf'), context);
+const ocrContext = vm.createContext({});
+vm.runInContext(functionCode('extractConfidentCccdNumber'), ocrContext);
+assert.strictEqual(ocrContext.extractConfidentCccdNumber({ confidence: 30,
+  lines: [{ text: 'So: 000 000 000 000', confidence: 92 }] }), '000000000000');
+assert.strictEqual(ocrContext.extractConfidentCccdNumber({ confidence: 95, text: '0000000000000' }), '');
+assert.strictEqual(ocrContext.extractConfidentCccdNumber({ confidence: 95, text: '000000000000 0' }), '');
+assert.strictEqual(ocrContext.extractConfidentCccdNumber({ words: [
+  { text: '000000000000', confidence: 90 }, { text: '111111111111', confidence: 90 }] }), '');
+assert.strictEqual(ocrContext.extractConfidentCccdNumber({ confidence: 30, text: '000000000000' }), '');
 const qrContext = vm.createContext({ importScripts() {}, self: {} });
 vm.runInContext(fs.readFileSync(path.join(root, 'assets/cccd-qr-worker.js'), 'utf8'), qrContext);
 const payload = '000000000000|000000000|TEST PERSON|01011990|X|TEST ADDRESS|01012020';

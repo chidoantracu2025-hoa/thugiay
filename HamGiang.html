@@ -657,14 +657,16 @@
       return new Promise(resolve => setTimeout(resolve, 0));
     }
 
-    async function readCccdQr(canvas) {
+    async function readCccdQr(canvas, half = null) {
       if (!qrWorker) return '';
-      const scale = Math.min(1, 2200 / Math.max(canvas.width, canvas.height));
+      const sourceX = half === 'right' ? Math.floor(canvas.width * 0.4) : 0;
+      const sourceWidth = half ? Math.ceil(canvas.width * 0.6) : canvas.width;
+      const scale = Math.min(1, 2200 / Math.max(sourceWidth, canvas.height));
       const probe = document.createElement('canvas');
-      probe.width = Math.max(1, Math.round(canvas.width * scale));
+      probe.width = Math.max(1, Math.round(sourceWidth * scale));
       probe.height = Math.max(1, Math.round(canvas.height * scale));
       const ctx = probe.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(canvas, 0, 0, probe.width, probe.height);
+      ctx.drawImage(canvas, sourceX, 0, sourceWidth, canvas.height, 0, 0, probe.width, probe.height);
       const pixels = ctx.getImageData(0, 0, probe.width, probe.height);
       const id = ++qrRequestId;
       return new Promise(resolve => {
@@ -1075,6 +1077,56 @@
       }
     }
 
+    function extractConfidentCccdNumber(data) {
+      const candidates = new Set();
+      const collect = (text, confidence) => {
+        if (Number(confidence) < 70 || !Number.isFinite(Number(confidence))) return;
+        // Reject entire longer numeric runs; never take 12 digits out of 13+.
+        for (const run of String(text || '').match(/\d(?:[ .-]*\d)*/g) || []) {
+          const digits = run.replace(/\D/g, '');
+          if (digits.length === 12) candidates.add(digits);
+        }
+      };
+      for (const word of data.words || []) collect(word.text, word.confidence);
+      for (const line of data.lines || []) collect(line.text, line.confidence);
+      if (!candidates.size) collect(data.text, data.confidence);
+      return candidates.size === 1 ? [...candidates][0] : '';
+    }
+
+    function prepareCccdOcrImage(canvas, rotation = 0, cropNumberArea = false) {
+      const oriented = document.createElement('canvas');
+      const sideways = rotation === 90 || rotation === 270;
+      oriented.width = sideways ? canvas.height : canvas.width;
+      oriented.height = sideways ? canvas.width : canvas.height;
+      const ctx = oriented.getContext('2d', { willReadFrequently: true });
+      ctx.translate(oriented.width / 2, oriented.height / 2);
+      ctx.rotate(rotation * Math.PI / 180);
+      ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+      // Broad right-hand region on landscape cards: exclude the portrait,
+      // keep both old and newer front layouts. Full-card pass always comes first.
+      const x = cropNumberArea ? Math.floor(oriented.width * 0.28) : 0;
+      const width = oriented.width - x;
+      const image = document.createElement('canvas');
+      const scale = Math.min(2, 2400 / width);
+      const border = 16;
+      image.width = Math.round(width * scale) + border * 2;
+      image.height = Math.round(oriented.height * scale) + border * 2;
+      const context = image.getContext('2d', { willReadFrequently: true });
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, image.width, image.height);
+      context.drawImage(oriented, x, 0, width, oriented.height,
+        border, border, image.width - border * 2, image.height - border * 2);
+      const pixels = context.getImageData(0, 0, image.width, image.height);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        const gray = 0.299 * pixels.data[i] + 0.587 * pixels.data[i + 1] + 0.114 * pixels.data[i + 2];
+        const value = Math.max(0, Math.min(255, (gray - 128) * 1.55 + 155));
+        pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = value;
+      }
+      context.putImageData(pixels, 0, 0);
+      oriented.width = oriented.height = 1;
+      return image;
+    }
+
     function autoReadCccdNumber(item) {
       const generation = identityGeneration;
       const initialValue = document.getElementById('soCCCD').value;
@@ -1086,6 +1138,11 @@
           setStatus('Đang đọc mã QR CCCD trên thiết bị...', 'normal');
           let number = await readCccdQr(item.originalCanvas || item.canvas);
           if (!number && isCurrent()) number = await readCccdQr(item.canvas);
+          for (const half of ['right', 'left']) {
+            if (number || !isCurrent()) break;
+            // Read original detail before reducing a wide photo to a single probe.
+            number = await readCccdQr(item.originalCanvas || item.canvas, half);
+          }
           let source = 'QR';
           if (!number && isCurrent()) {
             source = 'OCR';
@@ -1101,9 +1158,30 @@
             cccdOcrWorker = await cccdOcrWorkerPromise;
             await cccdOcrWorker.setParameters({ tessedit_pageseg_mode: '11' });
             const result = await cccdOcrWorker.recognize(item.canvas);
-            const numbers = [...new Set((String(result.data.text || '').match(/(?<!\d)(?:\d[ .-]*){11}\d(?!\d)/g) || [])
-              .map(value => value.replace(/\D/g, '')))];
-            if (numbers.length === 1 && result.data.confidence >= 70) number = numbers[0];
+            number = extractConfidentCccdNumber(result.data);
+            if (!number && isCurrent()) {
+              // Read digits independently of Vietnamese labels and background patterns.
+              await cccdOcrWorker.setParameters({
+                tessedit_pageseg_mode: '11', tessedit_char_whitelist: '0123456789'
+              });
+              try {
+                const rotations = item.canvas.width >= item.canvas.height ? [0, 180] : [90, 270];
+                for (const rotation of rotations) {
+                  if (number || !isCurrent()) break;
+                  setStatus('Đang đọc vùng số CCCD và kiểm tra chiều ảnh...', 'normal');
+                  const prepared = prepareCccdOcrImage(item.canvas, rotation, true);
+                  try {
+                    const digits = await cccdOcrWorker.recognize(prepared);
+                    number = extractConfidentCccdNumber(digits.data);
+                  } finally {
+                    prepared.width = prepared.height = 1;
+                  }
+                  await yieldToInterface();
+                }
+              } finally {
+                await cccdOcrWorker.setParameters({ tessedit_char_whitelist: '' });
+              }
+            }
           }
           if (!isCurrent()) return;
           const input = document.getElementById('soCCCD');
@@ -1193,7 +1271,11 @@
             }
           }
 
-          setStatus(state.pendingRetakeId ? 'Đã thay ảnh tại vị trí cũ' : `Đã xử lý ${filesToProcess.length} ảnh`, 'success');
+          setStatus(`Đã xử lý ${filesToProcess.length} ảnh`, 'success');
+          await identityQueue;
+          if (document.getElementById('imageUploadType').value === 'document') {
+            setStatus('Đã xử lý ảnh GCN. Nếu đây là CCCD, hãy chọn CCCD mặt trước rồi tải lại ảnh để đọc số.', 'normal');
+          }
         } catch (error) {
           alert('Không xử lý được ảnh: ' + error.message);
           setStatus('Lỗi xử lý ảnh', 'error');
