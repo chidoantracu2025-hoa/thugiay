@@ -16,17 +16,27 @@
 <section aria-labelledby="overviewTitle"><h2 id="overviewTitle">Tổng hợp từng xã</h2><div class="table-wrap"><table><thead><tr><th>Xã</th><th>Tổng hồ sơ</th><th>Đã có GCN</th><th>Chưa xử lý</th><th>Lần cập nhật / kết nối</th></tr></thead><tbody id="summaryRows"></tbody></table></div></section>
 <nav id="tabs" class="tabs" role="tablist" aria-label="Báo cáo theo xã"></nav>
 <section id="panel" role="tabpanel"><h2 id="selectedName"></h2><p id="selectedStatus" role="status"></p><div id="tabDetails"></div>
-<details><summary>Cấu hình API riêng của xã</summary><label for="apiUrl">Web App URL</label><input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/.../exec"><button id="saveApi">Lưu API và đọc báo cáo</button><p class="muted">Cấu hình dùng chung với trang thu giấy của xã này trên cùng trình duyệt. Nếu trang thu giấy đang mở, tải lại trang đó sau khi đổi API.</p></details>
-<div class="actions" style="margin-top:18px"><button id="refreshSelected">Cập nhật xã này</button><a id="openApp" class="link secondary" target="_blank" rel="noopener">Mở trang thu giấy</a></div></section>
-<footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; API lỗi không được tính là 0.</footer>
+<details><summary>Cấu hình Google Sheet công khai của xã</summary><label for="csvUrl">Link Google Sheet / CSV công khai</label><input type="url" id="csvUrl" placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"><button id="saveCsv">Lưu link và đọc báo cáo</button><p class="muted">Mỗi xã lưu một link riêng, không thay đổi API của trang thu giấy. Google Sheet: Tệp → Chia sẻ → Xuất bản lên web → chọn trang tính dữ liệu → CSV.</p></details>
+<div class="actions" style="margin-top:18px"><button id="refreshSelected">Cập nhật xã này</button><a id="openApp" class="link secondary" target="_blank" rel="noopener">Mở trang thu giấy</a></div>
+<h2>Danh sách thửa theo xã</h2>
+<label for="recordFilter">Danh sách cần xem</label>
+<select id="recordFilter"><option value="collectedPending">Đã thu giấy và chưa xử lý</option><option value="collected">Tất cả đã thu giấy</option><option value="pending">Tất cả chưa xử lý</option><option value="all">Tất cả hồ sơ</option></select>
+<label for="recordSearch">Tìm họ tên, tờ hoặc thửa</label><input id="recordSearch" type="search" placeholder="Nhập để lọc danh sách">
+<p id="recordCount" class="muted" aria-live="polite"></p>
+<div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Tình trạng</th></tr></thead><tbody id="recordRows"></tbody></table></div>
+<div class="actions" style="margin-top:14px"><button id="prevRecords">Trang trước</button><span id="recordPage" class="muted"></span><button id="nextRecords">Trang sau</button></div>
+</section>
+<footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; Nguồn CSV lỗi không được tính là 0. Số liệu phụ thuộc lần Google cập nhật bản công khai.</footer>
 </main>
 <script>
-const PAGES = [{"id": "HamGiang", "name": "Hàm Giang", "file": "HamGiang.html", "key": "landApiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbyHj01dMvwTQ3rsly6jlMvkB5nwK4qOzNqUVjgFf6R86tEf7dDZeqf9Qj7qFWFrn9FP/exec"}, {"id": "TraCu", "name": "Trà Cú", "file": "TraCu.html", "key": "landScan:TraCu:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycby1nGc2_GmnJwmXjDMZUIMK2NQ43mB1xlh3VI06OUorJmOPs5hN-dFTDQZzWZabR4LB/exec"}, {"id": "LongHiep", "name": "Long Hiệp", "file": "LongHiep.html", "key": "landScan:LongHiep:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbyCqX2DXAwZp3WQVw5Yu56F6H6HWBKdtZqZdTuAIq5bND2hbmJrVsMtWVXSi3wp1Hdu/exec"}, {"id": "TapSon", "name": "Tập Sơn", "file": "TapSon.html", "key": "landScan:TapSon:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbxL1hw17g1NaRUwD8LR279O3OlLoiN-sVlZk_o8snjYDIQ34q4IOwW6U8cicLFwdjp5/exec"}, {"id": "LuuNghiepAnh", "name": "Lưu Nghiệp Anh", "file": "LuuNghiepAnh.html", "key": "landScan:LuuNghiepAnh:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbzWYWAXfeNTZrsjhPf3_SQG-oPGmMXwo5GsXSYaNvUqjEOwcWNPpTGAM05lur4_j6zV/exec"}, {"id": "DaiAn", "name": "Đại An", "file": "DaiAn.html", "key": "landScan:DaiAn:apiUrl", "defaultApi": "https://script.google.com/macros/s/AKfycbzMP_DZ6h_3Xc_r9eGSuukvt-i6xc7VdAtJQ8W-NSVknZtpHe1RF3E4EpF0zhyq6Lbdvw/exec"}];
-const states = PAGES.map(() => ({ status: 'idle', counts: null, error: '', at: null, version: 0 }));
+const PAGES = [{"id": "HamGiang", "name": "Hàm Giang", "file": "HamGiang.html", "key": "landReport:HamGiang:csvUrl", "defaultCsv": ""}, {"id": "TraCu", "name": "Trà Cú", "file": "TraCu.html", "key": "landReport:TraCu:csvUrl", "defaultCsv": ""}, {"id": "LongHiep", "name": "Long Hiệp", "file": "LongHiep.html", "key": "landReport:LongHiep:csvUrl", "defaultCsv": ""}, {"id": "TapSon", "name": "Tập Sơn", "file": "TapSon.html", "key": "landReport:TapSon:csvUrl", "defaultCsv": ""}, {"id": "LuuNghiepAnh", "name": "Lưu Nghiệp Anh", "file": "LuuNghiepAnh.html", "key": "landReport:LuuNghiepAnh:csvUrl", "defaultCsv": ""}, {"id": "DaiAn", "name": "Đại An", "file": "DaiAn.html", "key": "landReport:DaiAn:csvUrl", "defaultCsv": ""}];
+const states = PAGES.map(() => ({ status: 'idle', counts: null, records: [], error: '', at: null, version: 0 }));
 let selected = 0;
+let recordPage = 0;
+const RECORD_PAGE_SIZE = 50;
 const format = value => new Intl.NumberFormat('vi-VN').format(value);
 const el = id => document.getElementById(id);
-function apiFor(page) { const saved = localStorage.getItem(page.key); return saved === null ? page.defaultApi : saved; }
+function csvFor(page) { const saved = localStorage.getItem(page.key); return saved === null ? page.defaultCsv : saved; }
 function statusText(state) {
   if (state.status === 'loading') return 'Đang đọc tất cả hồ sơ…';
   if (state.status === 'error') return state.error;
@@ -61,26 +71,58 @@ function renderSelected() {
     box.textContent = label; value.textContent = state.status === 'ready' ? format(state.counts[key]) : '—'; box.append(value); el('tabDetails').append(box);
   }
   el('openApp').href = page.file;
+  renderRecords();
+}
+function renderRecords() {
+  const state = states[selected];
+  const filter = el('recordFilter').value;
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase();
+  const query = normalize(el('recordSearch').value.trim());
+  const rows = (state.status === 'ready' ? state.records : []).filter(row => {
+    const collected = LandReports.hasGcn(row), pending = LandReports.isPending(row);
+    if (filter === 'collectedPending' && !(collected && pending)) return false;
+    if (filter === 'collected' && !collected) return false;
+    if (filter === 'pending' && !pending) return false;
+    return !query || normalize(['Họ Tên CSD','Số hiệu tờ bản đồ mới','Số thứ tự thửa mới','Số hiệu tờ bản đồ cũ','Số thứ tự thửa cũ'].map(key => row[key]).join(' ')).includes(query);
+  });
+  const pages = Math.max(1, Math.ceil(rows.length / RECORD_PAGE_SIZE));
+  recordPage = Math.min(recordPage, pages - 1);
+  el('recordRows').replaceChildren();
+  rows.slice(recordPage * RECORD_PAGE_SIZE, (recordPage + 1) * RECORD_PAGE_SIZE).forEach((row, index) => {
+    const tr = document.createElement('tr');
+    const values = [row.STT || recordPage * RECORD_PAGE_SIZE + index + 1, row['Họ Tên CSD'], row['Số hiệu tờ bản đồ mới'], row['Số thứ tự thửa mới'], row['Số hiệu tờ bản đồ cũ'], row['Số thứ tự thửa cũ'], row['Diện tích']];
+    values.forEach(value => { const td = document.createElement('td'); td.textContent = value || '—'; tr.append(td); });
+    const file = document.createElement('td'), url = String(row['File GCN'] || '').trim();
+    file.textContent = url ? 'Đã thu giấy' : 'Chưa có';
+    if (/^https?:\/\//i.test(url)) { const a = document.createElement('a'); a.href = url; a.textContent = 'Xem GCN'; a.target = '_blank'; a.rel = 'noopener'; file.replaceChildren(a); }
+    tr.append(file);
+    const status = document.createElement('td'); status.textContent = row['Tình trạng xử lý'] || 'Chưa xử lý'; tr.append(status); el('recordRows').append(tr);
+  });
+  el('recordCount').textContent = state.status === 'ready' ? `${format(rows.length)} hồ sơ phù hợp tại ${PAGES[selected].name}` : 'Chưa có dữ liệu CSV để hiển thị.';
+  if (state.status === 'ready' && !rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 9; td.textContent = 'Không có hồ sơ phù hợp bộ lọc.'; tr.append(td); el('recordRows').append(tr); }
+  el('recordPage').textContent = `Trang ${recordPage + 1}/${pages}`;
+  el('prevRecords').disabled = recordPage === 0;
+  el('nextRecords').disabled = recordPage + 1 >= pages;
 }
 function selectTab(index) {
   selected = index;
+  recordPage = 0;
   [...el('tabs').children].forEach((tab, i) => { tab.setAttribute('aria-selected', String(i === index)); tab.tabIndex = i === index ? 0 : -1; });
   el('panel').setAttribute('aria-labelledby', 'tab-' + PAGES[index].id);
-  el('apiUrl').value = apiFor(PAGES[index]); renderSelected();
+  el('csvUrl').value = csvFor(PAGES[index]); renderSelected();
 }
 async function refresh(index) {
   const page = PAGES[index], state = states[index], version = ++state.version;
-  state.status = 'loading'; state.counts = null; state.error = ''; render();
+  state.status = 'loading'; state.counts = null; state.records = []; state.error = ''; render();
   try {
-    const api = apiFor(page).trim();
-    if (!api) throw new Error('Chưa cấu hình API cho ' + page.name);
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(api)) throw new Error('Nhập URL triển khai Apps Script kết thúc bằng /exec.');
-    const counts = await LandReports.loadReport(api);
+    const link = csvFor(page).trim();
+    if (!link) throw new Error('Chưa cấu hình link CSV cho ' + page.name);
+    const report = await LandReports.loadReport(link);
     if (version !== state.version) return;
-    state.counts = counts; state.status = 'ready'; state.at = new Date();
+    state.counts = report.counts; state.records = report.records; state.status = 'ready'; state.at = new Date();
   } catch (error) {
     if (version !== state.version) return;
-    state.status = 'error'; state.error = error.name === 'AbortError' ? 'API quá thời gian chờ; thử cập nhật lại.' : error.message;
+    state.status = 'error'; state.error = error.name === 'AbortError' ? 'CSV quá thời gian chờ; thử cập nhật lại.' : error.message;
   }
   render();
 }
@@ -99,10 +141,13 @@ PAGES.forEach((page, index) => {
 });
 el('refreshAll').onclick = () => Promise.all(PAGES.map((_, i) => refresh(i)));
 el('refreshSelected').onclick = () => refresh(selected);
-el('saveApi').onclick = () => { localStorage.setItem(PAGES[selected].key, el('apiUrl').value.trim()); refresh(selected); };
+el('saveCsv').onclick = () => { localStorage.setItem(PAGES[selected].key, el('csvUrl').value.trim()); refresh(selected); };
 window.addEventListener('storage', event => {
   const index = PAGES.findIndex(page => page.key === event.key);
-  if (index >= 0) { if (index === selected) el('apiUrl').value = apiFor(PAGES[index]); refresh(index); }
+  if (index >= 0) { if (index === selected) el('csvUrl').value = csvFor(PAGES[index]); refresh(index); }
 });
+el('recordFilter').onchange = el('recordSearch').oninput = () => { recordPage = 0; renderRecords(); };
+el('prevRecords').onclick = () => { recordPage--; renderRecords(); };
+el('nextRecords').onclick = () => { recordPage++; renderRecords(); };
 selectTab(0); render(); Promise.all(PAGES.map((_, i) => refresh(i)));
 </script></body></html>

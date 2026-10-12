@@ -1,36 +1,31 @@
 const assert = require('assert');
 if (typeof AbortController === 'undefined') global.AbortController = class { constructor() { this.signal = {}; } abort() {} };
 const reports = require('../assets/report-dashboard.js');
-const makeRow = index => ({ rowIndex: index + 2,
-  'File GCN': index % 2 === 0 ? ' https://example.test/gcn ' : ' ',
-  'Tình trạng xử lý': index % 3 === 0 ? 'Đã xử lý' : '' });
-const response = body => ({ ok: true, text: async () => JSON.stringify(body) });
+const header = 'STT,Họ Tên CSD,File GCN,Tình trạng xử lý';
+const csv = '\uFEFF' + header + '\r\n1,"Nguyễn, Văn ""A""",https://example.test/gcn,Chưa xử lý\r\n2,"Tên\ntrên hai dòng",,Đã xử lý\r\n3,Người B, ,\r\n\r\n';
+const rows = reports.parseCsv(csv);
+assert.strictEqual(rows.length, 3);
+assert.strictEqual(rows[0]['Họ Tên CSD'], 'Nguyễn, Văn "A"');
+assert.strictEqual(rows[1]['Họ Tên CSD'], 'Tên\ntrên hai dòng');
+assert.deepStrictEqual(reports.summarize(rows), { total: 3, withGcn: 1, pending: 2 });
+assert.strictEqual(rows.filter(row => reports.hasGcn(row) && reports.isPending(row)).length, 1);
+assert.strictEqual(reports.parseCsv(header + '\n').length, 0);
+assert.throws(() => reports.parseCsv('<html>Login</html>'), /HTML/);
+assert.throws(() => reports.parseCsv('Other\n1'), /thiếu cột/);
+assert.throws(() => reports.parseCsv(header + '\n1,"unclosed'), /dấu nháy/);
+assert.throws(() => reports.parseCsv(header + '\n1,name'), /số cột/);
+const published = 'https://docs.google.com/spreadsheets/d/e/2PACX-test/pub?output=csv&gid=123&single=true';
+assert.strictEqual(reports.csvUrl(published), published);
+assert.strictEqual(reports.csvUrl('https://docs.google.com/spreadsheets/d/test-id/edit#gid=42'), 'https://docs.google.com/spreadsheets/d/test-id/export?format=csv&gid=42');
+assert.throws(() => reports.csvUrl('https://script.google.com/macros/s/test/exec'), /Google Sheet/);
 (async () => {
-  const rows = Array.from({ length: 1203 }, (_, i) => makeRow(i));
-  const offsets = [];
-  const mock = async (url, options) => {
-    const { action, payload } = JSON.parse(options.body);
-    assert.strictEqual(action, 'REPORT'); offsets.push(payload.offset);
-    return response({ success: true, total: rows.length, offset: payload.offset, data: rows.slice(payload.offset, payload.offset + 500) });
-  };
-  const counts = await reports.loadReport('test', mock);
-  assert.deepStrictEqual(offsets, [0, 500, 1000]);
-  assert.deepStrictEqual(counts, { total: 1203, withGcn: 602, pending: 802 });
-  assert.deepStrictEqual(await reports.loadReport('test', async () => response({ success: true, total: 0, offset: 0, data: [] })), { total: 0, withGcn: 0, pending: 0 });
-  async function rejects(mock, message) {
-    let error; try { await reports.loadReport('test', mock); } catch (e) { error = e; }
-    assert(error && message.test(error.message));
-  }
-  await rejects(async () => response({ success: true, total: 3, offset: 0, data: [] }), /thiếu/);
-  await rejects(async () => ({ ok: true, text: async () => '<html>Login</html>' }), /JSON/);
-  await rejects(async () => response({ success: false, error: 'Unauthorized' }), /Unauthorized/);
-  await rejects(async (_, options) => {
-    const offset = JSON.parse(options.body).payload.offset;
-    return response({ success: true, total: offset === 0 ? 501 : 502, offset, data: [makeRow(0)] });
-  }, /thay đổi/);
-  await rejects(async (_, options) => {
-    const offset = JSON.parse(options.body).payload.offset;
-    return response({ success: true, total: 2, offset, data: [makeRow(0)] });
-  }, /trùng/);
-  console.log('PASS: full pagination, GCN/pending counts, empty report, malformed API, changing totals and duplicate rows');
+  const result = await reports.loadReport(published, async (url, options) => {
+    assert.strictEqual(url, published); assert.strictEqual(options.method, 'GET'); assert.strictEqual(options.credentials, 'omit'); assert.strictEqual(options.body, undefined);
+    return { ok: true, text: async () => csv };
+  });
+  assert.strictEqual(result.records.length, 3);
+  assert.strictEqual(result.counts.withGcn, 1);
+  const large = header + '\n' + Array.from({ length: 1203 }, (_, i) => `${i + 1},Person,link,Chưa xử lý`).join('\n');
+  assert.strictEqual(reports.summarize(reports.parseCsv(large)).total, 1203);
+  console.log('PASS: CSV quoting/BOM/newlines, validation, URL conversion, GET-only loading, counts and collected-pending filter');
 })().catch(error => { console.error(error); process.exitCode = 1; });
