@@ -75,7 +75,6 @@ function normalizeProcessingStatus(value) {
   return normalizeValue(value) === 'Đã xử lý' ? 'Đã xử lý' : 'Chưa xử lý';
 }
 
-// Chuẩn hóa chuỗi tìm kiếm: chuyển chữ thường, xóa dấu tiếng Việt và khoảng trắng thừa
 function normalizeSearchText(value) {
   return normalizeValue(value)
     .toLowerCase()
@@ -117,12 +116,14 @@ function rowToObject(row, rowIndex) {
   };
 }
 
-// HÀM TÌM KIẾM NÂNG CẤP: Hỗ trợ linh hoạt theo query chung HOẶC theo từng trường cụ thể (name, soHieuToBanDoMoi, soThuTuThuaMoi)
+// HÀM TÌM KIẾM BỔ SUNG: Tìm theo tờ/thửa mới HOẶC tờ/thửa cũ
 function searchRecords(payload) {
   const query = normalizeSearchText(payload && payload.query);
   const paramName = normalizeSearchText(payload && (payload.name || payload.hoTenCSD));
-  const paramToMoi = normalizeSearchText(payload && payload.soHieuToBanDoMoi);
-  const paramThuaMoi = normalizeSearchText(payload && payload.soThuTuThuaMoi);
+  const paramToMoi = normalizeSearchText(payload && (payload.soHieuToBanDoMoi || payload.searchMapSheet));
+  const paramThuaMoi = normalizeSearchText(payload && (payload.soThuTuThuaMoi || payload.searchPlot));
+  const paramToCu = normalizeSearchText(payload && (payload.soHieuToBanDoCu || payload.searchMapSheetOld));
+  const paramThuaCu = normalizeSearchText(payload && (payload.soThuTuThuaCu || payload.searchPlotOld));
 
   const requestedLimit = Number(payload && payload.limit ? payload.limit : 30);
   const limit = Math.max(1, Math.min(100, isFinite(requestedLimit) ? requestedLimit : 30));
@@ -136,8 +137,8 @@ function searchRecords(payload) {
   const values = sheet.getRange(2, 1, lastRow - 1, HEADER_ROW.length).getValues();
   const rows = values.map((row, index) => rowToObject(row, index + 2));
 
-  // Nếu không nhập bất kỳ tham số tìm kiếm nào, trả về danh sách hồ sơ mới nhất
-  if (!query && !paramName && !paramToMoi && !paramThuaMoi) {
+  // Trả về dữ liệu mới nhất nếu không truyền tham số lọc
+  if (!query && !paramName && !paramToMoi && !paramThuaMoi && !paramToCu && !paramThuaCu) {
     const filtered = rows.slice(-limit).reverse();
     return { success: true, count: filtered.length, data: filtered };
   }
@@ -148,9 +149,11 @@ function searchRecords(payload) {
     const nameNorm = normalizeSearchText(row['Họ Tên CSD']);
     const mapSheetNorm = normalizeSearchText(row['Số hiệu tờ bản đồ mới']);
     const plotNorm = normalizeSearchText(row['Số thứ tự thửa mới']);
+    const mapSheetOldNorm = normalizeSearchText(row['Số hiệu tờ bản đồ cũ']);
+    const plotOldNorm = normalizeSearchText(row['Số thứ tự thửa cũ']);
 
-    // 1. Nếu có gửi tham số trường riêng lẻ (name, soHieuToBanDoMoi, soThuTuThuaMoi)
-    if (paramName || paramToMoi || paramThuaMoi) {
+    // 1. Kiểm tra tham số trường cụ thể
+    if (paramName || paramToMoi || paramThuaMoi || paramToCu || paramThuaCu) {
       if (paramName && nameNorm.indexOf(paramName) === -1) {
         return false;
       }
@@ -160,14 +163,22 @@ function searchRecords(payload) {
       if (paramThuaMoi && plotNorm !== paramThuaMoi) {
         return false;
       }
+      if (paramToCu && mapSheetOldNorm !== paramToCu) {
+        return false;
+      }
+      if (paramThuaCu && plotOldNorm !== paramThuaCu) {
+        return false;
+      }
     }
 
-    // 2. Nếu có gửi từ khóa tìm kiếm chung (query)
+    // 2. Tìm kiếm theo từ khóa chung (query)
     if (query) {
       const fullHaystackNorm = normalizeSearchText([
         row['Họ Tên CSD'],
         row['Số hiệu tờ bản đồ mới'],
         row['Số thứ tự thửa mới'],
+        row['Số hiệu tờ bản đồ cũ'],
+        row['Số thứ tự thửa cũ'],
         row['Số CCCD'],
         row['Tên huyện'],
         row['Tên xã mới'],
@@ -176,23 +187,23 @@ function searchRecords(payload) {
         row['Ghi chú']
       ].join(' '));
 
-      // Khớp 1: Khớp chuỗi trực tiếp
       if (fullHaystackNorm.indexOf(query) >= 0) {
         return true;
       }
 
-      // Khớp 2: Tất cả các từ đều có trong Họ Tên CSD
       const matchNameTokens = queryTokens.length > 0 && queryTokens.every(token => nameNorm.indexOf(token) >= 0);
       if (matchNameTokens) {
         return true;
       }
 
-      // Khớp 3: Khớp kết hợp Tờ / Thửa
       const isMapOrPlotMatch = queryTokens.length > 0 && queryTokens.every(token => 
-        mapSheetNorm.indexOf(token) >= 0 || plotNorm.indexOf(token) >= 0
+        mapSheetNorm.indexOf(token) >= 0 || 
+        plotNorm.indexOf(token) >= 0 ||
+        mapSheetOldNorm.indexOf(token) >= 0 ||
+        plotOldNorm.indexOf(token) >= 0
       );
 
-      if (!isMapOrPlotMatch && !paramName && !paramToMoi && !paramThuaMoi) {
+      if (!isMapOrPlotMatch && !paramName && !paramToMoi && !paramThuaMoi && !paramToCu && !paramThuaCu) {
         return false;
       }
     }
@@ -233,6 +244,8 @@ function reportRecords(payload) {
       'Họ Tên CSD': record['Họ Tên CSD'],
       'Số hiệu tờ bản đồ mới': record['Số hiệu tờ bản đồ mới'],
       'Số thứ tự thửa mới': record['Số thứ tự thửa mới'],
+      'Số hiệu tờ bản đồ cũ': record['Số hiệu tờ bản đồ cũ'],
+      'Số thứ tự thửa cũ': record['Số thứ tự thửa cũ'],
       'Diện tích': record['Diện tích'],
       'File GCN': record['File GCN'],
       fileUrl: record.fileUrl,
@@ -285,18 +298,18 @@ function saveScanRecord(payload) {
   const isUpdate = rowIndex >= 2 && rowIndex <= sheet.getLastRow();
   const existingRow = isUpdate ? sheet.getRange(rowIndex, 1, 1, HEADER_ROW.length).getValues()[0] : [];
   
-  // Trích xuất các biến Base64 và tham số bổ sung từ payload
   const pdfOriginalBase64 = normalizeValue(payload && payload.pdfOriginalBase64);
-  const originalFileName = normalizeValue(payload && payload.originalFileName) || fileName;
+  const originalFileName = normalizeValue(payload && (payload.fileNameOriginal || payload.originalFileName)) || fileName;
   const requestedPageCount = Number(payload && payload.pageCount ? payload.pageCount : 1);
   const requestedCreatedAt = normalizeValue(payload && payload.createdAt ? new Date(payload.createdAt).toISOString() : new Date().toISOString());
 
   const pdfGCNBase64 = normalizeValue(payload && (payload.pdfGCNBase64 || payload.pdfBase64));
   const pdfCCCDBase64 = normalizeValue(payload && payload.pdfCCCDBase64);
   const driveWarnings = [];
+  let originalBackupSaved = false;
   let folder = null;
 
- if (pdfOriginalBase64 || pdfGCNBase64 || pdfCCCDBase64) {
+  if (pdfOriginalBase64 || pdfGCNBase64 || pdfCCCDBase64) {
     try { 
       folder = ensureFolder(); 
     } catch (e) { 
@@ -332,22 +345,20 @@ function saveScanRecord(payload) {
 
   const baseName = fileName.replace(/\.pdf$/i, '');
   const cccdFileName = normalizeValue(payload && payload.fileNameCCCD) || `${baseName.replace(/_GCN_\d+$/i, '')}_CCCD_${Date.now()}.pdf`;
-  let originalBackupSaved = false;
+
   if (pdfOriginalBase64 && folder) {
     try {
-      const saved = savePdfToDrive(folder, pdfOriginalBase64, originalFileName, 3 * 1000 * 1000);
+      const saved = savePdfToDrive(folder, pdfOriginalBase64, originalFileName);
       if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
       record.fileName = originalFileName;
       record.fileId = saved.fileId;
       record.fileUrl = saved.fileUrl;
-      record.pageCount = requestedPageCount;
-      record.createdAt = requestedCreatedAt;
-      record.source = 'mobile-app';
       originalBackupSaved = true;
     } catch (error) {
       driveWarnings.push('Không lưu được PDF bản gốc lên Drive: ' + error.toString());
     }
   }
+
   if (pdfGCNBase64 && folder) {
     try {
       const saved = savePdfToDrive(folder, pdfGCNBase64, fileName);
@@ -359,6 +370,7 @@ function saveScanRecord(payload) {
       driveWarnings.push('Không lưu được PDF GCN lên Drive: ' + error.toString());
     }
   }
+
   if (pdfCCCDBase64 && folder) {
     try {
       const saved = savePdfToDrive(folder, pdfCCCDBase64, cccdFileName);
@@ -390,8 +402,14 @@ function saveScanRecord(payload) {
   return {
     success: true,
     message: isUpdate ? 'Đã cập nhật hồ sơ.' : 'Đã lưu hồ sơ mới.',
-    warning: driveWarnings.join('\n'),
+    warning: driveWarnings.length > 0 ? driveWarnings.join('\n') : undefined,
     fileUrl: record.fileUrl,
+    fileId: record.fileId,
+    fileGCN: record['File GCN'],
+    fileCCCD: record['File CCCD'],
+    soCCCD: record['Số CCCD'],
+    updated: isUpdate,
+    originalBackupSaved: originalBackupSaved,
     rowIndex: isUpdate ? rowIndex : sheet.getLastRow()
   };
 }
@@ -401,8 +419,17 @@ function savePdfToDrive(folder, pdfBase64, fileName) {
   if (!clean) throw new Error('PDF Base64 rỗng');
   const blob = Utilities.newBlob(Utilities.base64Decode(clean), 'application/pdf', fileName);
   const file = folder.createFile(blob);
+  let sharingWarning = '';
+
   try {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {}
-  return { fileId: file.getId(), fileUrl: file.getUrl() };
+  } catch (e) {
+    sharingWarning = 'Không thể chia sẻ công khai file: ' + e.toString();
+  }
+
+  return { 
+    fileId: file.getId(), 
+    fileUrl: file.getUrl(),
+    sharingWarning: sharingWarning || undefined
+  };
 }
