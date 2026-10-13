@@ -5,7 +5,7 @@ const window = self;
 const HTMLCanvasElement = OffscreenCanvas;
 const HTMLImageElement = class {};
 const state = { opencvReady: false, scanner: null, scanMode: 'opencv' };
-importScripts('../opencv.js', '../jscanify.min.js');
+importScripts('../opencv.js', '../jscanify.min.js', './a4-document-detector.js');
 const ready = Promise.resolve(self.cv).then(module => {
   window.cv = module;
   state.opencvReady = Boolean(module && module.Mat && module.findContours);
@@ -37,7 +37,9 @@ self.onmessage = async ({ data }) => {
       const jscanifyBounds = mode === 'all' ? detectDocumentWithJscanify(sourceCanvas) : null;
       if (jscanifyBounds) candidates.push(jscanifyBounds);
       const colorBounds = detectDocumentByColorFallback(sourceCanvas);
-      if (colorBounds) candidates.push(colorBounds);
+      const paperMatchesColor = window.A4DocumentDetector && candidates.some(candidate =>
+        candidate.paperShape && window.A4DocumentDetector.matchesBounds(candidate, colorBounds));
+      if (colorBounds && !paperMatchesColor) candidates.push(colorBounds);
 
       const detectedCandidates = candidates.filter(candidate => candidate && candidate.detected);
       if (!detectedCandidates.length) return colorBounds || candidates[0] || { x: 0, y: 0, width: sourceCanvas.width, height: sourceCanvas.height, detected: false, method: 'fallback' };
@@ -222,7 +224,7 @@ self.onmessage = async ({ data }) => {
         kernel = cv.Mat.ones(3, 3, cv.CV_8U);
         cv.cvtColor(source, gray, cv.COLOR_RGBA2GRAY);
         cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-        selected = findOpenCvDocumentContour(cv, blurred, width, height, sourceCanvas, scale, kernel, options);
+        selected = findOpenCvDocumentContour(cv, blurred, width, height, sourceCanvas, scale, kernel, options, source);
       } catch (error) {
         console.warn('OpenCV không nhận diện được khung tài liệu ở khung hình này.', error);
       } finally {
@@ -234,7 +236,7 @@ self.onmessage = async ({ data }) => {
       return selected;
     }
 
-    function findOpenCvDocumentContour(cv, blurred, width, height, sourceCanvas, scale, kernel, options = {}) {
+    function findOpenCvDocumentContour(cv, blurred, width, height, sourceCanvas, scale, kernel, options = {}, source = null) {
       const candidates = [];
       const edgeThresholds = options.fast
         ? [[50, 150]]
@@ -301,6 +303,12 @@ self.onmessage = async ({ data }) => {
           contours.delete();
           hierarchy.delete();
         }
+      }
+
+      // Paper masks tolerate curved/torn outlines that cannot simplify to four vertices.
+      if (window.A4DocumentDetector) {
+        const paper = window.A4DocumentDetector.detect(cv, source, blurred, sourceCanvas, scale, options);
+        if (paper) candidates.push(paper);
       }
 
       if (!candidates.length) return null;

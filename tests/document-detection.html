@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Document detection browser regression</title>
+  <style>
+    body { max-width: 1050px; margin: 24px auto; padding: 0 16px; font: 16px system-ui; color: #17202a; }
+    li { margin: 8px 0; white-space: pre-wrap; }
+    .pass { color: #17633b; } .fail { color: #ad1826; } .skip { color: #72591b; }
+    #fixtures { display: flex; flex-wrap: wrap; gap: 14px; }
+    figure { margin: 0; } canvas { width: 144px; height: auto; border: 1px solid #ddd; }
+    figcaption { max-width: 170px; font-size: 13px; }
+  </style>
+  <script src="../opencv.js"></script>
+  <script src="../assets/a4-document-detector.js"></script>
+</head>
+<body>
+  <h1>Document detection browser regression</h1>
+  <p>Generated images contain no personal data. Serve the repository over HTTP and open this page.
+    Add <code>?sample=test.jpg</code> to check the optional local sample too.</p>
+  <p id="status">Loading OpenCV…</p>
+  <ol id="results" data-complete="false"></ol>
+  <div id="fixtures"></div>
+  <script>
+    'use strict';
+    const results = [];
+    const output = document.getElementById('results');
+    let scan;
+    let cvModule;
+    function assert(condition, message) { if (!condition) throw new Error(message); }
+    function record(name, status, detail = '') {
+      const result = { name, status, detail };
+      results.push(result);
+      const row = document.createElement('li');
+      row.className = status.toLowerCase();
+      row.textContent = `${status}: ${name}${detail ? ' — ' + detail : ''}`;
+      output.appendChild(row);
+    }
+    async function check(name, run) {
+      try { const detail = await run(); record(name, 'PASS', detail || ''); }
+      catch (error) { record(name, 'FAIL', error.message || String(error)); }
+    }
+    function createCanvas(width = 720, height = 960) {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      return canvas;
+    }
+    function backdrop(canvas, uniform = false) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const pixels = ctx.createImageData(canvas.width, canvas.height);
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          const i = (y * canvas.width + x) * 4;
+          const noise = uniform ? 0 : ((x * 13 + y * 17) % 11) - 5;
+          const texture = uniform ? 0 : 4 * Math.sin(x / 19) * Math.cos(y / 31);
+          pixels.data[i] = 161 + noise + texture;
+          pixels.data[i + 1] = 155 + noise + texture;
+          pixels.data[i + 2] = 144 + noise + texture;
+          pixels.data[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(pixels, 0, 0);
+      if (!uniform) {
+        ctx.strokeStyle = 'rgba(78,68,64,.4)';
+        ctx.lineWidth = 3;
+        for (let y = 45; y < canvas.height; y += 135) {
+          ctx.beginPath(); ctx.moveTo(22, y); ctx.quadraticCurveTo(57, y + 18, 65, y + 52); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(canvas.width - 70, y + 40); ctx.lineTo(canvas.width - 21, y + 50); ctx.stroke();
+        }
+      }
+      return ctx;
+    }
+    function polygon(ctx, points) {
+      ctx.beginPath();
+      points.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      ctx.closePath();
+    }
+    function drawPaper(ctx, points, options = {}) {
+      ctx.save();
+      polygon(ctx, points);
+      ctx.fillStyle = options.color || '#edf0f7';
+      ctx.fill();
+      ctx.clip();
+      if (options.wrinkles) {
+        const shadow = ctx.createLinearGradient(462, 0, 538, 0);
+        shadow.addColorStop(0, 'rgba(0,0,0,0)');
+        shadow.addColorStop(.42, 'rgba(65,66,72,.24)');
+        shadow.addColorStop(.6, 'rgba(255,255,255,.36)');
+        shadow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = shadow; ctx.fillRect(450, 80, 105, 730);
+        const horizontal = ctx.createLinearGradient(0, 425, 0, 465);
+        horizontal.addColorStop(0, 'rgba(0,0,0,0)');
+        horizontal.addColorStop(.5, 'rgba(70,70,80,.13)');
+        horizontal.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = horizontal; ctx.fillRect(110, 425, 490, 40);
+      }
+      ctx.fillStyle = '#777d89';
+      for (let y = 205; y < 405; y += 26) {
+        for (let x = 183; x < 473; x += 32) ctx.fillRect(x, y, 20 + (x % 9), 3);
+      }
+      ctx.strokeStyle = '#80838d'; ctx.lineWidth = 1;
+      ctx.strokeRect(177, 180, 333, 478);
+      ctx.strokeStyle = '#ad5968'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(456, 363, 37, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+    function boundsOf(points) {
+      const xs = points.map(point => point[0]), ys = points.map(point => point[1]);
+      return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    }
+    function overlap(candidate, expected) {
+      if (!candidate) return 0;
+      const width = Math.max(0, Math.min(candidate.x + candidate.width, expected.x + expected.width) - Math.max(candidate.x, expected.x));
+      const height = Math.max(0, Math.min(candidate.y + candidate.height, expected.y + expected.height) - Math.max(candidate.y, expected.y));
+      const intersection = width * height;
+      return intersection / (candidate.width * candidate.height + expected.width * expected.height - intersection);
+    }
+    function verifyBounds(candidate, expected, minimum = .82) {
+      assert(candidate && candidate.detected, 'No document detected');
+      const iou = overlap(candidate, expected);
+      assert(iou >= minimum, `Detected bounds overlap ${(100 * iou).toFixed(1)}%; expected at least ${minimum * 100}%`);
+      assert(candidate.width > 0 && candidate.height > 0, 'Non-positive crop size');
+      if (candidate.corners) {
+        assert(candidate.corners.length === 4, 'Perspective crop requires four corners');
+        assert(candidate.corners.every(point => Number.isFinite(point.x) && Number.isFinite(point.y)), 'Invalid corner coordinates');
+      }
+      return `bounds overlap ${(100 * iou).toFixed(1)}%`;
+    }
+    function directPaper(canvas, options = {}) {
+      let source, gray, blurred;
+      try {
+        source = cvModule.matFromImageData(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height));
+        gray = new cvModule.Mat(); blurred = new cvModule.Mat();
+        cvModule.cvtColor(source, gray, cvModule.COLOR_RGBA2GRAY);
+        cvModule.GaussianBlur(gray, blurred, new cvModule.Size(5, 5), 0, 0, cvModule.BORDER_DEFAULT);
+        return window.A4DocumentDetector.detect(cvModule, source, blurred, canvas, 1, options);
+      } finally { [source, gray, blurred].forEach(mat => { if (mat) mat.delete(); }); }
+    }
+    function displayFixture(name, canvas) {
+      const figure = document.createElement('figure');
+      const caption = document.createElement('figcaption'); caption.textContent = name;
+      figure.append(canvas, caption); document.getElementById('fixtures').append(figure);
+    }
+    async function compareWorker(canvas, options) {
+      assert(typeof Worker === 'function' && typeof OffscreenCanvas === 'function', 'Browser lacks the worker canvas APIs');
+      const main = scan.prepareScan(canvas, options);
+      const worker = new Worker('../assets/document-scan-worker.js');
+      let timer;
+      try {
+        const bitmap = await createImageBitmap(canvas);
+        const result = await new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Scan worker timed out after 30 seconds')), 30000);
+          worker.onerror = event => reject(new Error(event.message || 'Scan worker crashed'));
+          worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data);
+          worker.postMessage({ id: 1, bitmap, options, mode: 'opencv' }, [bitmap]);
+        });
+        assert(result.detected === main.detected, 'Worker and main thread disagree on detection');
+        assert(result.method === main.method, 'Worker and main thread disagree on method');
+        const remote = createCanvas(result.bitmap.width, result.bitmap.height);
+        remote.getContext('2d').drawImage(result.bitmap, 0, 0); result.bitmap.close();
+        assert(remote.width === main.canvas.width && remote.height === main.canvas.height,
+          `Output sizes differ: worker ${remote.width}×${remote.height}, main ${main.canvas.width}×${main.canvas.height}`);
+        const a = main.canvas.getContext('2d').getImageData(0, 0, remote.width, remote.height).data;
+        const b = remote.getContext('2d').getImageData(0, 0, remote.width, remote.height).data;
+        let difference = 0, count = 0;
+        for (let i = 0; i < a.length; i += 64) {
+          for (let c = 0; c < 3; c++) { difference += Math.abs(a[i + c] - b[i + c]); count++; }
+        }
+        const average = difference / count;
+        assert(average <= 2, `Average output pixel difference ${average.toFixed(3)} exceeds 2`);
+        return `${remote.width}×${remote.height}; mean RGB difference ${average.toFixed(3)}`;
+      } finally { clearTimeout(timer); worker.terminate(); }
+    }
+    async function loadImage(url) {
+      const image = new Image();
+      await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error(`Cannot load optional sample ${url}`)); image.src = url; });
+      const canvas = createCanvas(image.naturalWidth, image.naturalHeight);
+      canvas.getContext('2d').drawImage(image, 0, 0); return canvas;
+    }
+    async function run() {
+      cvModule = await Promise.resolve(window.cv);
+      window.cv = cvModule;
+      assert(cvModule && cvModule.Mat, 'OpenCV failed to initialize');
+      assert(window.A4DocumentDetector && typeof window.A4DocumentDetector.detect === 'function', 'A4 detector script is missing');
+      const response = await fetch('../HamGiang.html', { cache: 'no-store' });
+      assert(response.ok, `Cannot read HamGiang.html: HTTP ${response.status}`);
+      const html = await response.text();
+      const start = html.indexOf('    function detectDocumentBounds(');
+      const end = html.indexOf('    function preparePdfImage(', start);
+      assert(start >= 0 && end > start, 'Cannot extract the production scan functions');
+      const state = { opencvReady: true, scanner: null, scanMode: 'opencv' };
+      scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, prepareScan };')(state, document, window);
+      document.getElementById('status').textContent = 'Running generated-image and worker checks…';
+      const options = { documentType: 'document', preferSpread: true, targetLongEdge: 800 };
+
+      const flat = createCanvas(); const flatPoints = [[141, 126], [571, 126], [571, 734], [141, 734]];
+      drawPaper(backdrop(flat), flatPoints); displayFixture('Flat A4', flat);
+      await check('Flat A4 on textured background', () => verifyBounds(scan.detectDocumentBounds(flat, 'opencv', options), boundsOf(flatPoints)));
+
+      const wrinkled = createCanvas();
+      const wrinkledPoints = [[143, 120], [571, 132], [568, 235], [552, 310], [568, 390], [561, 475], [572, 530], [554, 605], [547, 691], [560, 731], [136, 735], [133, 589], [137, 440], [132, 269]];
+      drawPaper(backdrop(wrinkled), wrinkledPoints, { wrinkles: true }); displayFixture('Irregular A4 and crease shadows', wrinkled);
+      await check('New detector recognizes an irregular A4 outline', () => {
+        const candidate = directPaper(wrinkled, options);
+        assert(candidate && candidate.paperShape === true, 'New paper-shape candidate was not returned');
+        return verifyBounds(candidate, boundsOf(wrinkledPoints));
+      });
+      await check('Production pipeline retains the wrinkled page', () => verifyBounds(scan.detectDocumentBounds(wrinkled, 'opencv', options), boundsOf(wrinkledPoints)));
+
+      const skewed = createCanvas(); const skewedPoints = [[160, 115], [580, 174], [545, 790], [108, 716]];
+      drawPaper(backdrop(skewed), skewedPoints); displayFixture('Skewed A4', skewed);
+      await check('Skewed A4 perspective detection', () => {
+        const candidate = scan.detectDocumentBounds(skewed, 'opencv', options);
+        const detail = verifyBounds(candidate, boundsOf(skewedPoints));
+        assert(candidate.corners && candidate.corners.length === 4, 'Skewed page has no perspective corners');
+        return detail;
+      });
+
+      const rotated = createCanvas(); const angle = .27;
+      const rotatedPoints = [[-190,-270], [190,-270], [190,270], [-190,270]].map(([x,y]) => [360 + x * Math.cos(angle) - y * Math.sin(angle), 470 + x * Math.sin(angle) + y * Math.cos(angle)]);
+      drawPaper(backdrop(rotated), rotatedPoints); displayFixture('Rotated A4', rotated);
+      await check('Rotated A4 detection', () => verifyBounds(scan.detectDocumentBounds(rotated, 'opencv', options), boundsOf(rotatedPoints)));
+
+      const blank = createCanvas(); backdrop(blank, true);
+      await check('Blank frame remains undetected', () => {
+        assert(!directPaper(blank, options), 'New detector accepted a blank background');
+        assert(!scan.detectDocumentBounds(blank, 'opencv', options).detected, 'Production pipeline accepted a blank background');
+      });
+      const textured = createCanvas(); backdrop(textured);
+      await check('Background texture is not an A4 page', () => assert(!directPaper(textured, options), 'New detector accepted background markings'));
+
+      const card = createCanvas(); const cardPoints = [[180, 350], [540, 350], [540, 577], [180, 577]];
+      drawPaper(backdrop(card), cardPoints, { color: '#e9edf0' }); displayFixture('Identity-card regression', card);
+      await check('A4 extension excludes CCCD', () => {
+        for (const documentType of ['cccd-front', 'cccd-back']) assert(!directPaper(card, { documentType }), `A4 detector accepted ${documentType}`);
+        return verifyBounds(scan.detectDocumentBounds(card, 'opencv', { documentType: 'cccd-front' }), boundsOf(cardPoints));
+      });
+
+      const spread = createCanvas(); const spreadContext = backdrop(spread);
+      drawPaper(spreadContext, [[85, 220], [353, 220], [353, 599], [85, 599]]);
+      drawPaper(spreadContext, [[358, 220], [626, 220], [626, 599], [358, 599]]);
+      displayFixture('Existing A3 two-page spread', spread);
+      await check('A3 spread retains both adjacent pages', () => {
+        const candidate = scan.detectDocumentBounds(spread, 'opencv', options);
+        const detail = verifyBounds(candidate, { x: 85, y: 220, width: 541, height: 379 });
+        assert(candidate.x <= 100 && candidate.x + candidate.width >= 610, 'One half of the spread was dropped');
+        return detail;
+      });
+      await check('Wrinkled-page worker and main-thread scans agree', () => compareWorker(wrinkled, options));
+
+      const sample = new URLSearchParams(location.search).get('sample');
+      if (sample) {
+        await check('Optional local sample is detected', async () => {
+          const canvas = await loadImage(new URL('../' + sample, location.href).href);
+          displayFixture('Optional local sample', canvas);
+          const candidate = scan.detectDocumentBounds(canvas, 'opencv', options);
+          assert(candidate && candidate.detected && candidate.corners, 'Sample did not produce perspective corners');
+          // The supplied test.jpg paper occupies these approximate normalized bounds.
+          if (sample === 'test.jpg') verifyBounds(candidate, { x: canvas.width * .19, y: canvas.height * .13, width: canvas.width * .585, height: canvas.height * .625 }, .8);
+          await compareWorker(canvas, options);
+          return `detected via ${candidate.method}; worker agrees`;
+        });
+      } else record('Optional local test.jpg', 'SKIP', 'Use ?sample=test.jpg when the local sample is available');
+    }
+    run().catch(error => record('Harness initialization', 'FAIL', error.message || String(error))).finally(() => {
+      const failed = results.filter(result => result.status === 'FAIL').length;
+      const passed = results.filter(result => result.status === 'PASS').length;
+      const skipped = results.filter(result => result.status === 'SKIP').length;
+      document.getElementById('status').textContent = `Complete: ${passed} passed, ${failed} failed, ${skipped} skipped.`;
+      output.dataset.complete = 'true'; output.dataset.failed = String(failed);
+      document.body.dataset.complete = 'true'; document.body.dataset.failed = String(failed);
+      window.__documentDetectionResults = { complete: true, passed, failed, skipped, results };
+    });
+  </script>
+</body>
+</html>

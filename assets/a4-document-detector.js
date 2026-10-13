@@ -1,0 +1,161 @@
+/* Extra paper candidates for uneven A4/A3 outlines. Shared by the UI and scan Worker. */
+(function (root) {
+  'use strict';
+
+  function orderCorners(points) {
+    const center = points.reduce((sum, p) => ({ x: sum.x + p.x / 4, y: sum.y + p.y / 4 }), { x: 0, y: 0 });
+    const ordered = points.slice().sort((a, b) =>
+      Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
+    let first = 0;
+    ordered.forEach((p, i) => { if (p.x + p.y < ordered[first].x + ordered[first].y) first = i; });
+    return ordered.map((_, i) => ordered[(first + i) % 4]);
+  }
+
+  function polygonArea(points) {
+    return Math.abs(points.reduce((sum, p, i) => {
+      const next = points[(i + 1) % points.length];
+      return sum + p.x * next.y - next.x * p.y;
+    }, 0)) / 2;
+  }
+
+  function pointsFromMat(mat) {
+    const points = [];
+    for (let i = 0; i < mat.rows; i++) points.push({ x: mat.data32S[i * 2], y: mat.data32S[i * 2 + 1] });
+    return points;
+  }
+
+  // Expand the fitted quad to contain the whole hull, including curled edges.
+  function encloseOutline(corners, outline, width, height) {
+    const center = corners.reduce((sum, p) => ({ x: sum.x + p.x / 4, y: sum.y + p.y / 4 }), { x: 0, y: 0 });
+    let expansion = 1;
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i], b = corners[(i + 1) % 4];
+      const nx = b.y - a.y, ny = a.x - b.x;
+      const radius = nx * (a.x - center.x) + ny * (a.y - center.y);
+      if (radius <= 0) return null;
+      for (const p of outline) expansion = Math.max(expansion, (nx * (p.x - center.x) + ny * (p.y - center.y)) / radius);
+    }
+    // A large expansion means four corners do not describe this component well.
+    if (expansion > 1.08) return null;
+    expansion += 0.008;
+    const padded = corners.map(p => ({ x: center.x + (p.x - center.x) * expansion, y: center.y + (p.y - center.y) * expansion }));
+    if (padded.some(p => p.x < 0 || p.y < 0 || p.x >= width || p.y >= height)) return null;
+    return padded;
+  }
+
+  function fitOutline(cv, contour, width, height, sourceCanvas, scale) {
+    const contourArea = Math.abs(cv.contourArea(contour));
+    if (contourArea < width * height * 0.055 || contourArea > width * height * 0.88) return null;
+    const hull = new cv.Mat();
+    const polygon = new cv.Mat();
+    try {
+      cv.convexHull(contour, hull, false, true);
+      const hullArea = Math.abs(cv.contourArea(hull));
+      if (!hullArea || contourArea / hullArea < 0.78) return null;
+      const outline = pointsFromMat(hull);
+      const margin = Math.max(2, Math.min(width, height) * 0.006);
+      if (outline.some(p => p.x <= margin || p.y <= margin || p.x >= width - margin || p.y >= height - margin)) return null;
+
+      let corners = null;
+      const perimeter = cv.arcLength(hull, true);
+      for (const epsilon of [0.012, 0.02, 0.035, 0.05, 0.075]) {
+        cv.approxPolyDP(hull, polygon, epsilon * perimeter, true);
+        if (polygon.rows !== 4 || !cv.isContourConvex(polygon)) continue;
+        corners = encloseOutline(orderCorners(pointsFromMat(polygon)), outline, width, height);
+        if (corners) break;
+      }
+      if (!corners) {
+        // Strongly curved edges can retain more than four vertices at every epsilon.
+        const rect = cv.minAreaRect(hull);
+        const angle = rect.angle * Math.PI / 180;
+        const cosine = Math.cos(angle), sine = Math.sin(angle);
+        corners = orderCorners([[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => ({
+          x: rect.center.x + x * rect.size.width * cosine / 2 - y * rect.size.height * sine / 2,
+          y: rect.center.y + x * rect.size.width * sine / 2 + y * rect.size.height * cosine / 2
+        })));
+        corners = encloseOutline(corners, outline, width, height);
+      }
+      if (!corners) return null;
+      const area = polygonArea(corners);
+      const fill = contourArea / area;
+      if (fill < 0.76 || area > width * height * 0.9) return null;
+      const sides = corners.map((p, i) => Math.hypot(p.x - corners[(i + 1) % 4].x, p.y - corners[(i + 1) % 4].y));
+      const paperWidth = (sides[0] + sides[2]) / 2;
+      const paperHeight = (sides[1] + sides[3]) / 2;
+      const aspect = Math.max(paperWidth, paperHeight) / Math.max(1, Math.min(paperWidth, paperHeight));
+      if (aspect < 1.12 || aspect > 1.95 || Math.max(sides[0], sides[2]) / Math.max(1, Math.min(sides[0], sides[2])) > 1.6 ||
+          Math.max(sides[1], sides[3]) / Math.max(1, Math.min(sides[1], sides[3])) > 1.6) return null;
+      const scaled = corners.map(p => ({ x: p.x / scale, y: p.y / scale }));
+      const x = Math.max(0, Math.floor(Math.min(...scaled.map(p => p.x))));
+      const y = Math.max(0, Math.floor(Math.min(...scaled.map(p => p.y))));
+      const right = Math.min(sourceCanvas.width, Math.ceil(Math.max(...scaled.map(p => p.x))));
+      const bottom = Math.min(sourceCanvas.height, Math.ceil(Math.max(...scaled.map(p => p.y))));
+      return { x, y, width: right - x, height: bottom - y, corners: scaled, detected: true,
+        method: 'opencv', paperShape: true, paperConfidence: fill * Math.exp(-Math.abs(Math.log(aspect / Math.SQRT2))) };
+    } finally {
+      hull.delete();
+      polygon.delete();
+    }
+  }
+
+  function detect(cv, source, blurred, sourceCanvas, scale, options = {}) {
+    if (options.documentType && options.documentType.startsWith('cccd')) return null;
+    if (!source || !blurred || !cv || !cv.Mat) return null;
+    const width = source.cols, height = source.rows;
+    const mask = new cv.Mat(height, width, cv.CV_8UC1);
+    const closed = new cv.Mat();
+    const smooth = new cv.Mat();
+    const hierarchy = new cv.Mat();
+    const kernelSize = Math.max(3, Math.round(Math.min(width, height) * 0.012) | 1);
+    const kernel = cv.Mat.ones(kernelSize, kernelSize, cv.CV_8U);
+    let best = null;
+    try {
+      // Otsu adapts to the actual lighting; extra levels retain shaded paper edges.
+      const threshold = cv.threshold(blurred, mask, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+      cv.GaussianBlur(source, smooth, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+      const levels = options.fast ? [threshold, threshold + 12] : [threshold, threshold - 12, threshold + 12];
+      for (const level of levels) {
+        const cutoff = Math.max(110, Math.min(245, level));
+        const pixels = smooth.data, gray = blurred.data, bits = mask.data;
+        for (let i = 0, p = 0; i < bits.length; i++, p += 4) {
+          const maximum = Math.max(pixels[p], pixels[p + 1], pixels[p + 2]);
+          const minimum = Math.min(pixels[p], pixels[p + 1], pixels[p + 2]);
+          bits[i] = gray[i] >= cutoff && maximum - minimum <= 58 ? 255 : 0;
+        }
+        // Close text strokes and small crease shadows before fitting the outer edge.
+        cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, kernel);
+        const contours = new cv.MatVector();
+        try {
+          cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+          for (let i = 0; i < contours.size(); i++) {
+            const contour = contours.get(i);
+            try {
+              const candidate = fitOutline(cv, contour, width, height, sourceCanvas, scale);
+              if (!candidate) continue;
+              const score = polygonArea(candidate.corners) * candidate.paperConfidence;
+              if (!best || score > polygonArea(best.corners) * best.paperConfidence) best = candidate;
+            } finally { contour.delete(); }
+          }
+        } finally { contours.delete(); }
+      }
+      return best;
+    } catch (error) {
+      console.warn('Không thể dò thêm đường viền giấy A4.', error);
+      return null;
+    } finally {
+      mask.delete(); closed.delete(); smooth.delete(); hierarchy.delete(); kernel.delete();
+    }
+  }
+
+  // Prefer validated perspective corners over a box describing the same paper.
+  function matchesBounds(paper, bounds) {
+    if (!paper || !bounds || !bounds.detected || paper.paperConfidence < 0.8) return false;
+    const width = Math.max(0, Math.min(paper.x + paper.width, bounds.x + bounds.width) - Math.max(paper.x, bounds.x));
+    const height = Math.max(0, Math.min(paper.y + paper.height, bounds.y + bounds.height) - Math.max(paper.y, bounds.y));
+    const intersection = width * height;
+    const union = paper.width * paper.height + bounds.width * bounds.height - intersection;
+    return union > 0 && intersection / union >= 0.82;
+  }
+
+  root.A4DocumentDetector = { detect, matchesBounds };
+})(typeof self !== 'undefined' ? self : globalThis);
