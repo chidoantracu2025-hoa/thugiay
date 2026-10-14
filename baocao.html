@@ -30,7 +30,7 @@
 <select id="recordFilter"><option value="collectedPending">Đã thu giấy và chưa xử lý</option><option value="collected">Tất cả đã thu giấy</option><option value="pending">Tất cả chưa xử lý</option><option value="all">Tất cả hồ sơ</option></select>
 <label for="recordSearch">Tìm họ tên, tờ hoặc thửa</label><input id="recordSearch" type="search" placeholder="Nhập để lọc danh sách">
 <p id="recordCount" class="muted" aria-live="polite"></p>
-<div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Tình trạng</th></tr></thead><tbody id="recordRows"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Số CCCD</th><th>File CCCD</th><th>Tình trạng</th></tr></thead><tbody id="recordRows"></tbody></table></div>
 <div class="actions" style="margin-top:14px"><button id="prevRecords">Trang trước</button><span id="recordPage" class="muted"></span><button id="nextRecords">Trang sau</button></div>
 </section>
 <footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; Nguồn CSV lỗi không được tính là 0. Số liệu phụ thuộc lần Google cập nhật bản công khai.</footer>
@@ -135,10 +135,23 @@ function renderRecords() {
     file.textContent = url ? 'Đã thu giấy' : 'Chưa có';
     if (/^https?:\/\//i.test(url)) { const a = document.createElement('a'); a.href = url; a.textContent = 'Xem GCN'; a.target = '_blank'; a.rel = 'noopener'; file.replaceChildren(a); }
     tr.append(file);
+    const cccdNumber = document.createElement('td');
+    cccdNumber.textContent = String(row['Số CCCD'] || '').trim() || '—';
+    tr.append(cccdNumber);
+    const cccdFile = document.createElement('td');
+    const cccdUrl = String(row['File CCCD'] || '').trim();
+    cccdFile.textContent = cccdUrl || 'Chưa có';
+    if (/^https?:\/\//i.test(cccdUrl)) {
+      const link = document.createElement('a');
+      link.href = cccdUrl; link.textContent = 'Xem CCCD';
+      link.target = '_blank'; link.rel = 'noopener';
+      cccdFile.replaceChildren(link);
+    }
+    tr.append(cccdFile);
     const status = document.createElement('td'); status.textContent = row['Tình trạng xử lý'] || 'Chưa xử lý'; tr.append(status); el('recordRows').append(tr);
   });
   el('recordCount').textContent = state.status === 'ready' ? `${format(rows.length)} hồ sơ phù hợp tại ${PAGES[selected].name}` : 'Chưa có dữ liệu CSV để hiển thị.';
-  if (state.status === 'ready' && !rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 9; td.textContent = 'Không có hồ sơ phù hợp bộ lọc.'; tr.append(td); el('recordRows').append(tr); }
+  if (state.status === 'ready' && !rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 11; td.textContent = 'Không có hồ sơ phù hợp bộ lọc.'; tr.append(td); el('recordRows').append(tr); }
   el('recordPage').textContent = `Trang ${recordPage + 1}/${pages}`;
   el('prevRecords').disabled = recordPage === 0;
   el('nextRecords').disabled = recordPage + 1 >= pages;
