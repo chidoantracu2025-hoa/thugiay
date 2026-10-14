@@ -50,3 +50,22 @@ rejection, CCCD exclusion, two-page spreads, and Worker/main-thread agreement.
 Add `?sample=test.jpg` to check the local sample as well.
 Real camera, lighting, card formats and browser Worker behavior still require
 validation on the target devices.
+
+# Default report sources
+
+For `baocao.html`, enter each commune's default public Google Sheet or published
+CSV link in `report-config.js` under its page ID (`HamGiang`, `TraCu`, `LongHiep`,
+`TapSon`, `LuuNghiepAnh`, `DaiAn`). If one spreadsheet contains multiple commune
+tabs, use the appropriate `gid` in each link. Deploy this configuration file
+alongside `report-dashboard.js` and the HTML page. No sample URL is enabled.
+The dashboard automatically loads the six effective sources when it opens.
+
+A visitor can override a commune's source in the configuration panel; this
+preference applies only to their browser. “Dùng link mặc định” removes that
+commune's override and immediately reloads the deployed default. Empty previous
+preferences also use the default. Browsers that cannot store preferences still
+use the defaults and can change sources for the current visit.
+
+Validation: `node tests/report-dashboard.test.js` and
+`node tests/report-sources.test.js`. These checks use generated data and make
+no requests to Google Sheets.

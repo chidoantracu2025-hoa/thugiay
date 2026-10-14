@@ -7,6 +7,7 @@
 <style>
 :root{font-family:system-ui,-apple-system,sans-serif;color:#182942;background:#f1f5f9}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px;margin:0 0 8px}h2{font-size:19px}p{line-height:1.6;color:#596b80}button,input,a{font:inherit}button,.link{border:0;border-radius:8px;background:#1d4ed8;color:white;padding:11px 16px;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.55;cursor:wait}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:20px}.value{display:block;font-size:34px;font-weight:750;margin-top:8px}.green{color:#047857}.orange{color:#b45309}.muted{color:#596b80;font-size:14px}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:680px;text-align:left}th,td{padding:14px 12px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc;font-size:14px}td button{padding:6px 10px;background:#eef2ff;color:#1d4ed8}.error{color:#b91c1c}.tabs{display:flex;gap:8px;overflow:auto;padding:22px 0 12px}.tabs button{white-space:nowrap;background:#e2e8f0;color:#334155}.tabs button[aria-selected="true"]{background:#1d4ed8;color:white}input{width:100%;padding:12px;border:1px solid #bac7d8;border-radius:8px;margin:8px 0 12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.secondary{background:#e2e8f0;color:#334155}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}#tabDetails{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}#tabDetails strong{font-size:24px;display:block}#notice{min-height:24px}footer{margin:24px 0;color:#596b80;font-size:13px}@media(max-width:650px){main{padding:14px}header{align-items:flex-start;flex-direction:column}.cards{gap:8px}.card{padding:12px}.value{font-size:26px}h1{font-size:22px}}
 </style>
+<script src="./assets/report-config.js"></script>
 <script src="./assets/report-dashboard.js"></script>
 </head>
 <body><main>
@@ -16,7 +17,13 @@
 <section aria-labelledby="overviewTitle"><h2 id="overviewTitle">Tổng hợp từng xã</h2><div class="table-wrap"><table><thead><tr><th>Xã</th><th>Tổng hồ sơ</th><th>Đã có GCN</th><th>Chưa xử lý</th><th>Lần cập nhật / kết nối</th></tr></thead><tbody id="summaryRows"></tbody></table></div></section>
 <nav id="tabs" class="tabs" role="tablist" aria-label="Báo cáo theo xã"></nav>
 <section id="panel" role="tabpanel"><h2 id="selectedName"></h2><p id="selectedStatus" role="status"></p><div id="tabDetails"></div>
-<details><summary>Cấu hình Google Sheet công khai của xã</summary><label for="csvUrl">Link Google Sheet / CSV công khai</label><input type="url" id="csvUrl" placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"><button id="saveCsv">Lưu link và đọc báo cáo</button><p class="muted">Mỗi xã lưu một link riêng, không thay đổi API của trang thu giấy. Google Sheet: Tệp → Chia sẻ → Xuất bản lên web → chọn trang tính dữ liệu → CSV.</p></details>
+<details id="csvSettings"><summary>Cấu hình Google Sheet công khai của xã</summary>
+<p id="csvSource" class="muted" role="status" aria-live="polite"></p>
+<label for="csvUrl">Link Google Sheet / CSV công khai</label><input type="url" id="csvUrl" placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv" aria-describedby="csvHelp csvSource">
+<div class="actions"><button id="saveCsv">Lưu link tùy chỉnh và đọc báo cáo</button><button id="resetCsv" class="secondary">Dùng link mặc định</button></div>
+<p id="csvConfigNotice" class="muted" role="status" aria-live="polite"></p>
+<p id="csvHelp" class="muted">Trang tự tải số liệu từ link mặc định khi mở. Link tùy chỉnh của mỗi xã chỉ lưu trên trình duyệt này; chọn “Dùng link mặc định” để quay lại nguồn chung. Google Sheet: Tệp → Chia sẻ → Xuất bản lên web → chọn trang tính dữ liệu → CSV.</p>
+</details>
 <div class="actions" style="margin-top:18px"><button id="refreshSelected">Cập nhật xã này</button><a id="openApp" class="link secondary" target="_blank" rel="noopener">Mở trang thu giấy</a></div>
 <h2>Danh sách thửa theo xã</h2>
 <label for="recordFilter">Danh sách cần xem</label>
@@ -29,14 +36,45 @@
 <footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; Nguồn CSV lỗi không được tính là 0. Số liệu phụ thuộc lần Google cập nhật bản công khai.</footer>
 </main>
 <script>
-const PAGES = [{"id": "HamGiang", "name": "Hàm Giang", "file": "HamGiang.html", "key": "landReport:HamGiang:csvUrl", "defaultCsv": ""}, {"id": "TraCu", "name": "Trà Cú", "file": "TraCu.html", "key": "landReport:TraCu:csvUrl", "defaultCsv": ""}, {"id": "LongHiep", "name": "Long Hiệp", "file": "LongHiep.html", "key": "landReport:LongHiep:csvUrl", "defaultCsv": ""}, {"id": "TapSon", "name": "Tập Sơn", "file": "TapSon.html", "key": "landReport:TapSon:csvUrl", "defaultCsv": ""}, {"id": "LuuNghiepAnh", "name": "Lưu Nghiệp Anh", "file": "LuuNghiepAnh.html", "key": "landReport:LuuNghiepAnh:csvUrl", "defaultCsv": ""}, {"id": "DaiAn", "name": "Đại An", "file": "DaiAn.html", "key": "landReport:DaiAn:csvUrl", "defaultCsv": ""}];
+const DEFAULT_CSV_URLS = window.LAND_REPORT_DEFAULT_CSV || {};
+const PAGES = [
+  { id: 'HamGiang', name: 'Hàm Giang', file: 'HamGiang.html' },
+  { id: 'TraCu', name: 'Trà Cú', file: 'TraCu.html' },
+  { id: 'LongHiep', name: 'Long Hiệp', file: 'LongHiep.html' },
+  { id: 'TapSon', name: 'Tập Sơn', file: 'TapSon.html' },
+  { id: 'LuuNghiepAnh', name: 'Lưu Nghiệp Anh', file: 'LuuNghiepAnh.html' },
+  { id: 'DaiAn', name: 'Đại An', file: 'DaiAn.html' }
+].map(page => ({ ...page, key: 'landReport:' + page.id + ':csvUrl', defaultCsv: String(DEFAULT_CSV_URLS[page.id] || '').trim() }));
 const states = PAGES.map(() => ({ status: 'idle', counts: null, records: [], error: '', at: null, version: 0 }));
+const sessionCsv = new Map();
 let selected = 0;
 let recordPage = 0;
 const RECORD_PAGE_SIZE = 50;
 const format = value => new Intl.NumberFormat('vi-VN').format(value);
 const el = id => document.getElementById(id);
-function csvFor(page) { const saved = localStorage.getItem(page.key); return saved === null ? page.defaultCsv : saved; }
+function savedCsvFor(page) {
+  if (sessionCsv.has(page.key)) return sessionCsv.get(page.key);
+  try { return localStorage.getItem(page.key); } catch (_) { return null; }
+}
+function csvFor(page) { return String(savedCsvFor(page) || '').trim() || page.defaultCsv; }
+function writeCsvPreference(page, value) {
+  // Keep this tab usable when the browser cannot persist preferences.
+  sessionCsv.set(page.key, value);
+  try {
+    if (value) localStorage.setItem(page.key, value);
+    else localStorage.removeItem(page.key);
+    sessionCsv.delete(page.key);
+    return true;
+  } catch (_) { return false; }
+}
+function renderCsvSource() {
+  const page = PAGES[selected];
+  const custom = String(savedCsvFor(page) || '').trim();
+  el('csvSource').textContent = custom
+    ? 'Đang dùng link tùy chỉnh ' + (sessionCsv.has(page.key) ? 'trong lần mở trang này.' : 'trên trình duyệt này.')
+    : page.defaultCsv ? 'Đang dùng link mặc định của ' + page.name + '.' : 'Xã này chưa có link mặc định. Bạn có thể nhập link công khai bên dưới.';
+  el('resetCsv').disabled = !custom;
+}
 function statusText(state) {
   if (state.status === 'loading') return 'Đang đọc tất cả hồ sơ…';
   if (state.status === 'error') return state.error;
@@ -71,6 +109,7 @@ function renderSelected() {
     box.textContent = label; value.textContent = state.status === 'ready' ? format(state.counts[key]) : '—'; box.append(value); el('tabDetails').append(box);
   }
   el('openApp').href = page.file;
+  renderCsvSource();
   renderRecords();
 }
 function renderRecords() {
@@ -109,6 +148,9 @@ function selectTab(index) {
   recordPage = 0;
   [...el('tabs').children].forEach((tab, i) => { tab.setAttribute('aria-selected', String(i === index)); tab.tabIndex = i === index ? 0 : -1; });
   el('panel').setAttribute('aria-labelledby', 'tab-' + PAGES[index].id);
+  el('csvConfigNotice').textContent = '';
+  el('csvConfigNotice').className = 'muted';
+  if (!csvFor(PAGES[index])) el('csvSettings').open = true;
   el('csvUrl').value = csvFor(PAGES[index]); renderSelected();
 }
 async function refresh(index) {
@@ -141,10 +183,30 @@ PAGES.forEach((page, index) => {
 });
 el('refreshAll').onclick = () => Promise.all(PAGES.map((_, i) => refresh(i)));
 el('refreshSelected').onclick = () => refresh(selected);
-el('saveCsv').onclick = () => { localStorage.setItem(PAGES[selected].key, el('csvUrl').value.trim()); refresh(selected); };
+function saveCsvPreference(value) {
+  const page = PAGES[selected];
+  if (value) {
+    try { LandReports.csvUrl(value); }
+    catch (error) { el('csvConfigNotice').textContent = error.message; el('csvConfigNotice').className = 'error'; return; }
+  }
+  const persisted = writeCsvPreference(page, value);
+  el('csvUrl').value = csvFor(page);
+  el('csvConfigNotice').className = 'muted';
+  el('csvConfigNotice').textContent = persisted
+    ? value ? 'Đã lưu link tùy chỉnh trên trình duyệt này.' : page.defaultCsv ? 'Đã quay về link mặc định.' : 'Đã xóa link tùy chỉnh. Xã này chưa có link mặc định.'
+    : 'Trình duyệt không lưu được cấu hình; thay đổi chỉ áp dụng trong lần mở trang này.';
+  refresh(selected);
+}
+el('saveCsv').onclick = () => saveCsvPreference(el('csvUrl').value.trim());
+el('resetCsv').onclick = () => saveCsvPreference('');
 window.addEventListener('storage', event => {
-  const index = PAGES.findIndex(page => page.key === event.key);
-  if (index >= 0) { if (index === selected) el('csvUrl').value = csvFor(PAGES[index]); refresh(index); }
+  try { if (event.storageArea && event.storageArea !== localStorage) return; } catch (_) { return; }
+  PAGES.forEach((page, index) => {
+    if (event.key !== null && page.key !== event.key) return;
+    sessionCsv.delete(page.key);
+    if (index === selected) { el('csvUrl').value = csvFor(page); el('csvConfigNotice').textContent = ''; }
+    refresh(index);
+  });
 });
 el('recordFilter').onchange = el('recordSearch').oninput = () => { recordPage = 0; renderRecords(); };
 el('prevRecords').onclick = () => { recordPage--; renderRecords(); };
