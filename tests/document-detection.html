@@ -191,7 +191,7 @@
       const end = html.indexOf('    function preparePdfImage(', start);
       assert(start >= 0 && end > start, 'Cannot extract the production scan functions');
       const state = { opencvReady: true, scanner: null, scanMode: 'opencv' };
-      scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, prepareScan };')(state, document, window);
+      scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, detectDocumentWithOpenCv, prepareScan };')(state, document, window);
       document.getElementById('status').textContent = 'Running generated-image and worker checks…';
       const options = { documentType: 'document', preferSpread: true, targetLongEdge: 800 };
 
@@ -208,6 +208,14 @@
         return verifyBounds(candidate, boundsOf(wrinkledPoints));
       });
       await check('Production pipeline retains the wrinkled page', () => verifyBounds(scan.detectDocumentBounds(wrinkled, 'opencv', options), boundsOf(wrinkledPoints)));
+      await check('Camera preview recognizes wrinkled A4 at 480 pixels', () =>
+        verifyBounds(scan.detectDocumentWithOpenCv(wrinkled, false, { fast: true, maxDimension: 480 }), boundsOf(wrinkledPoints)));
+      await check('A shaded edge strip keeps the wider fallback', () => {
+        const fallback = { x: 141, y: 126, width: 430, height: 608, detected: true };
+        const partial = { x: 141, y: 126, width: 365, height: 608, paperConfidence: .83 };
+        assert(!window.A4DocumentDetector.matchesBounds(partial, fallback), 'Partial paper mask displaced the full-page fallback');
+        assert(window.A4DocumentDetector.matchesBounds({ ...fallback, paperConfidence: .95 }, fallback), 'Matching paper bounds were rejected');
+      });
 
       const skewed = createCanvas(); const skewedPoints = [[160, 115], [580, 174], [545, 790], [108, 716]];
       drawPaper(backdrop(skewed), skewedPoints); displayFixture('Skewed A4', skewed);
@@ -258,7 +266,11 @@
           const candidate = scan.detectDocumentBounds(canvas, 'opencv', options);
           assert(candidate && candidate.detected && candidate.corners, 'Sample did not produce perspective corners');
           // The supplied test.jpg paper occupies these approximate normalized bounds.
-          if (sample === 'test.jpg') verifyBounds(candidate, { x: canvas.width * .19, y: canvas.height * .13, width: canvas.width * .585, height: canvas.height * .625 }, .8);
+          if (sample === 'test.jpg') {
+            const expected = { x: canvas.width * .19, y: canvas.height * .13, width: canvas.width * .585, height: canvas.height * .625 };
+            verifyBounds(candidate, expected, .8);
+            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { fast: true, maxDimension: 480 }), expected, .8);
+          }
           await compareWorker(canvas, options);
           return `detected via ${candidate.method}; worker agrees`;
         });

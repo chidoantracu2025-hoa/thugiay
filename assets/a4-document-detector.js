@@ -150,6 +150,11 @@
   // Prefer validated perspective corners over a box describing the same paper.
   function matchesBounds(paper, bounds) {
     if (!paper || !bounds || !bounds.detected || paper.paperConfidence < 0.8) return false;
+    // Keep the wider fallback if a shaded strip may be absent from the paper mask.
+    if (Math.abs(paper.x - bounds.x) > bounds.width * 0.045 ||
+        Math.abs(paper.y - bounds.y) > bounds.height * 0.045 ||
+        Math.abs(paper.x + paper.width - bounds.x - bounds.width) > bounds.width * 0.045 ||
+        Math.abs(paper.y + paper.height - bounds.y - bounds.height) > bounds.height * 0.045) return false;
     const width = Math.max(0, Math.min(paper.x + paper.width, bounds.x + bounds.width) - Math.max(paper.x, bounds.x));
     const height = Math.max(0, Math.min(paper.y + paper.height, bounds.y + bounds.height) - Math.max(paper.y, bounds.y));
     const intersection = width * height;
