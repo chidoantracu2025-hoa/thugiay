@@ -6,6 +6,7 @@
 <link rel="icon" href="data:,">
 <style>
 :root{font-family:system-ui,-apple-system,sans-serif;color:#182942;background:#f1f5f9}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px;margin:0 0 8px}h2{font-size:19px}p{line-height:1.6;color:#596b80}button,input,a{font:inherit}button,.link{border:0;border-radius:8px;background:#1d4ed8;color:white;padding:11px 16px;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.55;cursor:wait}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:20px}.value{display:block;font-size:34px;font-weight:750;margin-top:8px}.green{color:#047857}.orange{color:#b45309}.muted{color:#596b80;font-size:14px}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:680px;text-align:left}th,td{padding:14px 12px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc;font-size:14px}td button{padding:6px 10px;background:#eef2ff;color:#1d4ed8}.error{color:#b91c1c}.tabs{display:flex;gap:8px;overflow:auto;padding:22px 0 12px}.tabs button{white-space:nowrap;background:#e2e8f0;color:#334155}.tabs button[aria-selected="true"]{background:#1d4ed8;color:white}input{width:100%;padding:12px;border:1px solid #bac7d8;border-radius:8px;margin:8px 0 12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.secondary{background:#e2e8f0;color:#334155}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}#tabDetails{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}#tabDetails strong{font-size:24px;display:block}#notice{min-height:24px}footer{margin:24px 0;color:#596b80;font-size:13px}@media(max-width:650px){main{padding:14px}header{align-items:flex-start;flex-direction:column}.cards{gap:8px}.card{padding:12px}.value{font-size:26px}h1{font-size:22px}}
+td.record-note{min-width:220px;max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 <script src="./assets/report-config.js"></script>
 <script src="./assets/report-dashboard.js"></script>
@@ -30,7 +31,7 @@
 <select id="recordFilter"><option value="collectedPending">Đã thu giấy và chưa xử lý</option><option value="collected">Tất cả đã thu giấy</option><option value="pending">Tất cả chưa xử lý</option><option value="all">Tất cả hồ sơ</option></select>
 <label for="recordSearch">Tìm họ tên, tờ hoặc thửa</label><input id="recordSearch" type="search" placeholder="Nhập để lọc danh sách">
 <p id="recordCount" class="muted" aria-live="polite"></p>
-<div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Số CCCD</th><th>File CCCD</th><th>Tình trạng</th></tr></thead><tbody id="recordRows"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Số CCCD</th><th>File CCCD</th><th>Tình trạng</th><th>Ghi chú</th></tr></thead><tbody id="recordRows"></tbody></table></div>
 <div class="actions" style="margin-top:14px"><button id="prevRecords">Trang trước</button><span id="recordPage" class="muted"></span><button id="nextRecords">Trang sau</button></div>
 </section>
 <footer>Đã có GCN: cột “File GCN” có dữ liệu. Chưa xử lý: tình trạng khác “Đã xử lý”, bao gồm ô trống. Hai nhóm có thể trùng nhau. Tổng chỉ cộng các xã đọc thành công trong lần cập nhật; Nguồn CSV lỗi không được tính là 0. Số liệu phụ thuộc lần Google cập nhật bản công khai.</footer>
@@ -148,10 +149,13 @@ function renderRecords() {
       cccdFile.replaceChildren(link);
     }
     tr.append(cccdFile);
-    const status = document.createElement('td'); status.textContent = row['Tình trạng xử lý'] || 'Chưa xử lý'; tr.append(status); el('recordRows').append(tr);
+    const status = document.createElement('td'); status.textContent = row['Tình trạng xử lý'] || 'Chưa xử lý'; tr.append(status);
+    const notes = document.createElement('td'); notes.className = 'record-note';
+    notes.textContent = String(row['Ghi chú'] || '').trim() || '—';
+    tr.append(notes); el('recordRows').append(tr);
   });
   el('recordCount').textContent = state.status === 'ready' ? `${format(rows.length)} hồ sơ phù hợp tại ${PAGES[selected].name}` : 'Chưa có dữ liệu CSV để hiển thị.';
-  if (state.status === 'ready' && !rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 11; td.textContent = 'Không có hồ sơ phù hợp bộ lọc.'; tr.append(td); el('recordRows').append(tr); }
+  if (state.status === 'ready' && !rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 12; td.textContent = 'Không có hồ sơ phù hợp bộ lọc.'; tr.append(td); el('recordRows').append(tr); }
   el('recordPage').textContent = `Trang ${recordPage + 1}/${pages}`;
   el('prevRecords').disabled = recordPage === 0;
   el('nextRecords').disabled = recordPage + 1 >= pages;
