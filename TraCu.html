@@ -6,11 +6,10 @@
   <title>Quản Lý Đất Đai — Trà Cú</title>
   <link rel="icon" href="data:," />
   <script src="./assets/vendor/jspdf.umd.min.js"></script>
-  <script src="./assets/vendor/tesseract/tesseract.min.js"></script>
-  <script src="./opencv.js"></script>
-  <script src="./jscanify.min.js"></script>
   <script src="./assets/a4-document-detector.js"></script>
   <script src="./assets/scan-session.js"></script>
+  <script src="./assets/scan-quality.js"></script>
+  <script src="./assets/scan-runtime.js"></script>
   <script src="./assets/pdf-export.js"></script>
   <style>
     :root {
@@ -402,6 +401,14 @@
           <div class="helper">Khi chụp, “Tất cả” so sánh nhiều bộ nhận diện để tăng khả năng lấy đủ mép trang; xem trước dùng chế độ nhẹ để giảm nóng máy. Lựa chọn nhận diện chỉ áp dụng cho tab này.</div>
         </div>
 
+        <div class="field mt-8">
+          <label for="qualityDpi">Mức chi tiết cho giấy A3</label>
+          <select id="qualityDpi" onchange="setQualityDpi(this.value)">
+            <option value="400">Ưu tiên rõ chữ — tối đa 400 dpi (khuyến nghị)</option>
+            <option value="300">Giảm tải — tối đa 300 dpi, cần kiểm tra chữ nhỏ</option>
+          </select>
+          <div class="helper">Ảnh thiếu nét hoặc chói cần chụp lại. Ứng dụng giữ màu dấu và không phóng lớn ảnh để giả tăng độ phân giải.</div>
+        </div>
         <div class="camera-actions mt-8">
           <button class="primary" id="btnStartCamera" type="button" onclick="startCamera()">Bật camera</button>
           <button class="secondary" id="btnCapturePage" type="button" onclick="capturePage('document')" disabled>Chụp trang giấy tờ</button>
@@ -420,9 +427,11 @@
             <option value="cccd-front">CCCD mặt trước</option>
             <option value="cccd-back">CCCD mặt sau</option>
           </select>
+          <button class="secondary" type="button" onclick="document.getElementById('nativeCameraFile').click()">Chụp bằng camera hệ thống</button>
+          <input id="nativeCameraFile" type="file" accept="image/*" capture="environment" hidden onchange="processImageFiles(this.files)" />
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
           <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files)" />
-          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF nén chất lượng cao, tối đa 400 dpi và 10 MB mỗi file; hồ sơ lớn tự chia theo trang, lưu các phần trong cùng thư mục.</div>
+          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. Ảnh GCN ưu tiên khổ A3 và độ rõ chữ, xử lý tối đa 400 dpi; PDF tối đa 10 MB mỗi file. Camera tự nghỉ sau chụp và khi lưu. Hồ sơ lớn tự chia theo trang, lưu các phần trong cùng thư mục. Nên dùng camera hệ thống nếu trình duyệt chụp thiếu nét.</div>
         </div>
 
         <div class="mini-grid mt-8">
@@ -542,11 +551,16 @@
     </div>
   </div>
 
+  <div id="scanReview" hidden style="position:fixed;inset:0;z-index:1000;background:#fff;padding:12px;overflow:auto;">
+    <button class="secondary" type="button" onclick="closeScanReview()" style="position:sticky;top:0;z-index:1;">Đóng ảnh</button>
+    <p id="scanReviewHint" class="helper"></p>
+    <img id="scanReviewImage" alt="Ảnh đầy đủ để kiểm tra chữ" style="display:block;width:auto;max-width:none;height:auto;" />
+  </div>
   <script>
     const scanSessionId = ScanSession.createId();
     const SCAN_PAGE_ID = 'TraCu';
     const PAGE_STORAGE_PREFIX = 'landScan:' + SCAN_PAGE_ID + ':';
-    const PAGE_STORAGE_KEYS = { apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl', scanMode: PAGE_STORAGE_PREFIX + 'scanMode' };
+    const PAGE_STORAGE_KEYS = { apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl', scanMode: PAGE_STORAGE_PREFIX + 'scanMode', qualityDpi: PAGE_STORAGE_PREFIX + 'qualityDpi' };
     const pageSettings = new Map();
     let scanGeneration = 0;
     let scanSequence = 0;
@@ -558,7 +572,7 @@
       if (value === null) {
         try {
           value = localStorage.getItem(PAGE_STORAGE_KEYS[name]);
-          if (value === null && SCAN_PAGE_ID === 'HamGiang') value = localStorage.getItem(name === 'apiUrl' ? 'landApiUrl' : 'landScanMode');
+          if (value === null && SCAN_PAGE_ID === 'HamGiang' && name !== 'qualityDpi') value = localStorage.getItem(name === 'apiUrl' ? 'landApiUrl' : 'landScanMode');
         } catch (_) {}
       }
       pageSettings.set(name, value);
@@ -572,6 +586,13 @@
 
     const state = {
       stream: null,
+      cameraWanted: false,
+      cameraOpenGeneration: 0,
+      qualityDpi: Number(readPageSetting('qualityDpi')) === 300 ? 300 : 400,
+      cameraIdleTimer: 0,
+      pdfCache: [],
+      saveAttempt: null,
+      savedPdfGroups: null,
       documentPages: [],
       cccdPhotos: [],
       detectionFrame: 0,
@@ -585,43 +606,74 @@
       scanMode: readPageSetting('scanMode') || 'opencv'
     };
 
-    const opencvReady = Promise.resolve(window.cv).then(module => {
-      window.cv = module;
-      state.opencvReady = Boolean(module && module.Mat && module.findContours);
-      if (state.opencvReady && typeof window.jscanify === 'function') {
-        state.scanner = new window.jscanify();
-      }
-      return state.opencvReady;
-    }).catch(error => {
-      console.error('Không thể khởi tạo OpenCV.js.', error);
-      return false;
-    });
+    let opencvReady = null;
+    let scanClient = null;
+    let scanClientInitialized = false;
+    const scriptLoads = new Map();
 
-    const scanClient = typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function'
-      ? ScanSession.createWorkerClient('./assets/document-scan-worker.js', { sessionId: scanSessionId + ':document', timeoutMs: 120000 })
-      : null;
+    function loadLocalScript(src) {
+      if (!scriptLoads.has(src)) {
+        scriptLoads.set(src, new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.onload = resolve;
+          script.onerror = () => { scriptLoads.delete(src); reject(new Error('Không tải được thư viện ' + src)); };
+          document.head.appendChild(script);
+        }));
+      }
+      return scriptLoads.get(src);
+    }
+
+    function ensureOpenCv() {
+      if (!opencvReady) opencvReady = (async () => {
+        if (!window.cv) await loadLocalScript('./opencv.js');
+        window.cv = await Promise.resolve(window.cv);
+        state.opencvReady = Boolean(window.cv && window.cv.Mat && window.cv.findContours);
+        if (state.opencvReady) {
+          if (typeof window.jscanify !== 'function') await loadLocalScript('./jscanify.min.js');
+          state.scanner = new window.jscanify();
+        }
+        return state.opencvReady;
+      })().catch(error => { console.warn('Không tải được OpenCV.', error); return false; });
+      return opencvReady;
+    }
+
+    function getScanClient() {
+      if (!scanClientInitialized) {
+        scanClientInitialized = true;
+        if (typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function') {
+          scanClient = ScanSession.createWorkerClient('./assets/document-scan-worker.js', {
+            sessionId: scanSessionId + ':document', timeoutMs: 120000
+          });
+        }
+      }
+      return scanClient;
+    }
 
     async function prepareScanAsync(source, options = {}) {
-      // Capture this job's settings before any wait or queued recognition work.
       const mode = state.scanMode;
-      const settings = { ...options };
+      const settings = { documentFormat: 'a3', optimize: true, dpi: state.qualityDpi || 400, ...options };
       await yieldToInterface();
-      if (scanClient && scanClient.available) {
+      const client = getScanClient();
+      if (client && client.available) {
         const bitmap = await createImageBitmap(source);
-        const result = await scanClient.request({ bitmap, options: settings, mode }, [bitmap]);
+        const result = await client.request({ bitmap, options: settings, mode }, [bitmap]);
         if (result && result.bitmap) {
           try {
             const canvas = document.createElement('canvas');
             canvas.width = result.bitmap.width;
             canvas.height = result.bitmap.height;
             const context = canvas.getContext('2d');
-            if (!context) throw new Error('Thiết bị không đủ bộ nhớ để giữ ảnh đầy đủ độ phân giải.');
+            if (!context) throw new Error('Thiết bị không đủ bộ nhớ để giữ ảnh.');
             context.drawImage(result.bitmap, 0, 0);
-            return { canvas, detected: result.detected, method: result.method };
+            return { canvas, detected: result.detected, method: result.method, quality: result.quality,
+              dpi: result.dpi, effectiveDpi: result.effectiveDpi, lighting: result.lighting };
           } finally { result.bitmap.close(); }
         }
+        // Do not repeat a failed full OpenCV job on the UI thread of an already busy phone.
+        return prepareScan(source, { ...settings, lighting: false }, 'fallback');
       }
-      await opencvReady;
+      if (!scanClientInitialized || !client) await ensureOpenCv();
       return prepareScan(source, settings, mode);
     }
 
@@ -629,12 +681,15 @@
     let cccdOcrWorkerPromise = null;
     let identityQueue = Promise.resolve();
     let identityGeneration = 0;
-    const qrClient = ScanSession.createWorkerClient('./assets/cccd-qr-worker.js', { sessionId: scanSessionId + ':qr', timeoutMs: 30000 });
+    let qrClient = null;
 
     window.addEventListener('pagehide', event => {
+      stopCamera('', true);
       if (event.persisted) return;
       if (scanClient) scanClient.dispose();
-      qrClient.dispose();
+      if (qrClient) qrClient.dispose();
+      [...state.documentPages, ...state.cccdPhotos].forEach(item => window.ScanRuntime.disposeItem(item));
+      if (window.DocumentPdfExporter.clearCache) window.DocumentPdfExporter.clearCache();
       if (cccdOcrWorker) cccdOcrWorker.terminate();
     });
 
@@ -643,6 +698,7 @@
     }
 
     async function readCccdQr(canvas, half = null) {
+      if (!qrClient) qrClient = ScanSession.createWorkerClient('./assets/cccd-qr-worker.js', { sessionId: scanSessionId + ':qr', timeoutMs: 30000 });
       if (!qrClient.available) return '';
       const sourceX = half === 'right' ? Math.floor(canvas.width * 0.4) : 0;
       const sourceWidth = half ? Math.ceil(canvas.width * 0.6) : canvas.width;
@@ -653,7 +709,9 @@
       const ctx = probe.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(canvas, sourceX, 0, sourceWidth, canvas.height, 0, 0, probe.width, probe.height);
       const pixels = ctx.getImageData(0, 0, probe.width, probe.height);
-      const result = await qrClient.request({ width: probe.width, height: probe.height, buffer: pixels.data.buffer }, [pixels.data.buffer]);
+      const width = probe.width, height = probe.height;
+      window.ScanRuntime.releaseCanvas(probe);
+      const result = await qrClient.request({ width, height, buffer: pixels.data.buffer }, [pixels.data.buffer]);
       return result ? result.number || '' : '';
     }
 
@@ -666,6 +724,14 @@
 
     document.getElementById('scanMode').value = ['opencv', 'fallback', 'all'].includes(state.scanMode) ? state.scanMode : 'opencv';
 
+    document.getElementById('qualityDpi').value = String(state.qualityDpi);
+
+    function setQualityDpi(value) {
+      state.qualityDpi = Number(value) === 300 ? 300 : 400;
+      writePageSetting('qualityDpi', String(state.qualityDpi));
+      setStatus('Mức chi tiết áp dụng cho ảnh chụp hoặc tải lên tiếp theo. Hãy kiểm tra chữ nhỏ sau khi xử lý.', 'normal');
+    }
+
     function setScanMode(mode) {
       state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
       writePageSetting('scanMode', state.scanMode);
@@ -673,21 +739,7 @@
     }
 
     document.addEventListener('visibilitychange', () => {
-      if (!state.stream) return;
-      const tracks = state.stream.getVideoTracks();
-      if (document.hidden) {
-        tracks.forEach(track => { track.enabled = false; });
-        if (state.detectionFrame) {
-          clearTimeout(state.detectionFrame);
-          state.detectionFrame = 0;
-        }
-        setStatus('Camera tạm nghỉ khi ứng dụng chạy nền', 'normal');
-        return;
-      }
-
-      tracks.forEach(track => { track.enabled = true; });
-      scanCameraPreview();
-      setStatus('Camera tiếp tục hoạt động', 'success');
+      if (document.hidden && (state.stream || state.cameraWanted)) stopCamera('Camera nghỉ khi ứng dụng chạy nền. Bấm chụp để tiếp tục.', true);
     });
 
     function setStatus(message, tone = 'normal') {
@@ -721,10 +773,12 @@
       });
 
       const raw = await response.text();
-      const data = safeJsonParse(raw) || {};
-
-      if (!response.ok || data.success === false) {
-        throw new Error(data.error || `Request ${action} thất bại.`);
+      const data = safeJsonParse(raw);
+      if (!response.ok || !data || data.success !== true) {
+        const error = new Error(data && data.error || `Request ${action} thất bại hoặc máy chủ chưa trả kết quả hợp lệ.`);
+        error.code = data && data.code;
+        error.retryAfterMs = data && data.retryAfterMs;
+        throw error;
       }
 
       return data;
@@ -801,6 +855,8 @@
     function fillFormFromResult(item) {
       if (state.saving) { setStatus('Đang lưu hồ sơ, vui lòng chờ hoàn tất.', 'normal'); return; }
       identityGeneration++;
+      state.saveAttempt = null;
+      state.savedPdfGroups = null;
       const values = {
         tenHuyen: item['Tên huyện'] || item.tenHuyen || '',
         tenXaCu: item['Tên xã cũ'] || item.tenXaCu || '',
@@ -840,16 +896,21 @@
         alert('Thiết bị này không hỗ trợ camera.');
         return;
       }
-      if (state.stream) return;
+      if (state.stream || document.hidden || state.saving) return;
+      const openGeneration = ++state.cameraOpenGeneration;
+      const currentOpen = () => openGeneration === state.cameraOpenGeneration && !document.hidden && !state.saving;
 
+      let ownedStream = null;
+      const releaseOpened = stream => {
+        if (stream) stream.getTracks().forEach(track => track.stop());
+        if (state.stream === stream) state.stream = null;
+      };
       const startButton = document.getElementById('btnStartCamera');
       startButton.disabled = true;
+      ['btnCapturePage', 'btnCaptureFront', 'btnCaptureBack'].forEach(id => { document.getElementById(id).disabled = true; });
       try {
-        setStatus('Đang nạp OpenCV...', 'normal');
-        const openCvLoaded = await opencvReady;
-        if (!openCvLoaded) {
-          console.warn('OpenCV chưa sẵn sàng, camera vẫn sẽ bật mà không dùng nhận diện góc tự động.');
-        }
+        setStatus('Đang mở camera...', 'normal');
+        state.cameraWanted = true;
 
         const selectedCamera = document.getElementById('cameraSelect').value;
         const videoConstraints = createCameraConstraints();
@@ -861,10 +922,13 @@
           audio: false
         });
 
+        ownedStream = stream;
+        if (!currentOpen()) { releaseOpened(stream); return; }
         state.stream = stream;
         const video = document.getElementById('video');
         video.srcObject = stream;
-        await video.play();
+        await playCameraVideo(video);
+        if (!currentOpen()) { releaseOpened(stream); return; }
 
         let track = stream.getVideoTracks()[0];
         if (track && track.applyConstraints) {
@@ -878,8 +942,10 @@
           }
         }
 
+        if (!currentOpen()) { releaseOpened(stream); return; }
         const activeDeviceId = track && track.getSettings ? track.getSettings().deviceId : '';
         const cameras = await refreshCameras(activeDeviceId);
+        if (!currentOpen()) { releaseOpened(stream); return; }
         const activeCamera = cameras.find(camera => camera.deviceId === activeDeviceId);
         const activeLabel = `${track && track.label || ''} ${activeCamera && activeCamera.label || ''}`;
         if (isLikelyMonochromeCamera(activeLabel)) {
@@ -890,22 +956,27 @@
               video: { ...createCameraConstraints(), deviceId: { exact: colorCamera.deviceId } },
               audio: false
             });
+            ownedStream = colorStream;
+            if (!currentOpen()) { releaseOpened(colorStream); return; }
             state.stream = colorStream;
             video.srcObject = colorStream;
-            await video.play();
+            await playCameraVideo(video);
             track = colorStream.getVideoTracks()[0];
             await refreshCameras(track.getSettings ? track.getSettings().deviceId : colorCamera.deviceId);
           }
         }
 
+        if (!currentOpen()) { releaseOpened(ownedStream); return; }
         document.getElementById('btnCapturePage').disabled = false;
         document.getElementById('btnCaptureFront').disabled = false;
         document.getElementById('btnCaptureBack').disabled = false;
         document.getElementById('btnStopCamera').disabled = false;
 
+        armCameraIdle();
         scanCameraPreview();
-        setStatus(openCvLoaded ? 'Camera + OpenCV sẵn sàng' : 'Camera sẵn sàng (Chế độ cơ bản)', 'success');
+        setStatus('Camera sẵn sàng. Sau khi chụp, camera sẽ nghỉ để giảm nóng máy.', 'success');
       } catch (error) {
+        if (!currentOpen()) { releaseOpened(ownedStream); return; }
         if (state.stream) {
           state.stream.getTracks().forEach(track => track.stop());
           state.stream = null;
@@ -917,41 +988,72 @@
     }
 
     function createCameraConstraints() {
+      const stillPhotoSupported = 'ImageCapture' in window;
       return {
-        width: { ideal: 3840 },
-        height: { ideal: 2160 },
-        frameRate: { ideal: 15, max: 20 }
+        width: { ideal: stillPhotoSupported ? 1280 : 1920 },
+        height: { ideal: stillPhotoSupported ? 720 : 1080 },
+        frameRate: { ideal: 10, max: 15 }
       };
     }
 
-    function stopCamera() {
-      if (state.detectionFrame) {
-        clearTimeout(state.detectionFrame);
-        state.detectionFrame = 0;
-      }
-      if (state.stream) {
-        state.stream.getTracks().forEach(track => track.stop());
-        state.stream = null;
-      }
+    function armCameraIdle() {
+      clearTimeout(state.cameraIdleTimer);
+      state.cameraIdleTimer = setTimeout(() => {
+        if (state.stream) stopCamera('Camera nghỉ sau thời gian chờ. Bấm chụp để tiếp tục.', true);
+      }, 45000);
+    }
 
+    function stopCamera(message = 'Camera đã tắt, thiết bị được nghỉ', allowResume = false) {
+      state.cameraOpenGeneration++;
+      clearTimeout(state.cameraIdleTimer);
+      state.cameraIdleTimer = 0;
+      if (state.detectionFrame) clearTimeout(state.detectionFrame);
+      state.detectionFrame = 0;
+      if (state.stream) state.stream.getTracks().forEach(track => track.stop());
+      state.stream = null;
+      state.cameraWanted = allowResume;
       const video = document.getElementById('video');
-      if (video) {
-        video.pause();
-        video.srcObject = null;
-      }
-      document.getElementById('btnCapturePage').disabled = true;
-      document.getElementById('btnCaptureFront').disabled = true;
-      document.getElementById('btnCaptureBack').disabled = true;
+      if (video) { video.pause(); video.srcObject = null; }
+      ['btnCapturePage', 'btnCaptureFront', 'btnCaptureBack'].forEach(id => {
+        document.getElementById(id).disabled = !allowResume;
+      });
       document.getElementById('btnStopCamera').disabled = true;
       document.getElementById('btnStartCamera').disabled = false;
-
       const overlay = document.querySelector('.overlay');
       overlay.classList.remove('detected');
-      overlay.style.left = '9%';
-      overlay.style.top = '9%';
-      overlay.style.width = '82%';
-      overlay.style.height = '82%';
-      setStatus('Camera đã tắt, thiết bị được nghỉ', 'normal');
+      overlay.style.left = '9%'; overlay.style.top = '9%';
+      overlay.style.width = '82%'; overlay.style.height = '82%';
+      if (message) setStatus(message, 'normal');
+    }
+
+    async function playCameraVideo(video) {
+      let timeout;
+      try {
+        await Promise.race([Promise.resolve(video.play()), new Promise((resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Camera chưa phát được hình. Vui lòng mở lại hoặc dùng camera hệ thống.')), 5000);
+        })]);
+      } finally { clearTimeout(timeout); }
+    }
+
+    async function waitForCameraFrame(video) {
+      if (video.readyState >= 2 && video.videoWidth) return;
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => { cleanup(); reject(new Error('Camera chưa có ảnh. Vui lòng thử lại.')); }, 4000);
+        const ready = () => { cleanup(); resolve(); };
+        const cleanup = () => { clearTimeout(timeout); video.removeEventListener('loadeddata', ready); };
+        video.addEventListener('loadeddata', ready, { once: true });
+      });
+    }
+
+    async function raiseFallbackCaptureResolution(track, video) {
+      if (!track || !track.applyConstraints) return;
+      try {
+        await track.applyConstraints({ width: { ideal: 4096 }, height: { ideal: 3072 }, frameRate: { ideal: 5, max: 10 } });
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, 350);
+          if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(); });
+        });
+      } catch (_) { /* Keep the best video frame that this device actually supplies. */ }
     }
 
     async function refreshCameras(activeDeviceId) {
@@ -997,75 +1099,69 @@
       if (state.processing || state.saving) return;
       state.processing = true;
       const generation = scanGeneration;
+      const captureDpi = state.qualityDpi || 400;
+      let sourceCanvas = null;
+      let photoBitmap = null;
+      let keptItem = null;
       try {
+        if (!state.stream && state.cameraWanted) await startCamera();
         const video = document.getElementById('video');
-        if (!video || !video.videoWidth) {
-          alert('Camera chưa sẵn sàng.');
-          return;
-        }
-
-        const canvas = document.getElementById('scanCanvas');
+        if (!video || !state.stream) { alert('Hãy bật camera trước khi chụp.'); return; }
+        await waitForCameraFrame(video);
         const pendingItem = state.pendingRetakeId
-          ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId)
-          : null;
+          ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId) : null;
         const captureType = pendingItem ? pendingItem.type : type;
-        const track = state.stream && state.stream.getVideoTracks()[0];
-        let photoBitmap = null;
+        const track = state.stream.getVideoTracks()[0];
+        let originalBlob = null;
         if (track && 'ImageCapture' in window) {
           try {
             const camera = new ImageCapture(track);
-            let photo;
             try {
               const capabilities = camera.getPhotoCapabilities ? await camera.getPhotoCapabilities() : {};
-              const settings = {};
-              if (capabilities.imageWidth && capabilities.imageWidth.max > 0) settings.imageWidth = capabilities.imageWidth.max;
-              if (capabilities.imageHeight && capabilities.imageHeight.max > 0) settings.imageHeight = capabilities.imageHeight.max;
-              photo = await camera.takePhoto(settings);
-            } catch (_) { photo = await camera.takePhoto(); }
-            photoBitmap = await createImageBitmap(photo);
-          } catch (captureError) {
-            console.info('Ảnh tĩnh độ phân giải cao không khả dụng, dùng khung camera hiện tại.', captureError);
+              originalBlob = await camera.takePhoto(window.ScanRuntime.choosePhotoSettings(capabilities, captureType, captureDpi));
+            } catch (_) { originalBlob = await camera.takePhoto(); }
+            stopCamera('', true);
+            photoBitmap = await decodeImageFile(originalBlob);
+          } catch (error) {
+            if (originalBlob) throw new Error('Chưa đọc được ảnh vừa chụp. Vui lòng thử camera hệ thống; ảnh không bị thay bằng khung hình thiếu nét.');
+            console.info('Ảnh tĩnh chưa khả dụng; thử khung video rõ nhất.', error);
           }
         }
-
-        if (generation !== scanGeneration) {
-          if (photoBitmap) photoBitmap.close();
-          return;
-        }
-        const source = photoBitmap || video;
-        canvas.width = photoBitmap ? photoBitmap.width : video.videoWidth;
-        canvas.height = photoBitmap ? photoBitmap.height : video.videoHeight;
-        canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
-        if (photoBitmap && photoBitmap.close) photoBitmap.close();
-
-        const originalCanvas = document.createElement('canvas');
-        originalCanvas.width = canvas.width;
-        originalCanvas.height = canvas.height;
-        originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
-        const scan = await prepareScanAsync(canvas, { documentType: captureType, preferSpread: captureType === 'document' });
         if (generation !== scanGeneration) return;
-        const item = {
-          id: state.pendingRetakeId || createScanId(),
-          type: captureType,
-          canvas: scan.canvas,
-          originalCanvas,
-          fileName: captureType === 'document' ? 'Ảnh chụp' : (captureType === 'cccd-front' ? 'CCCD mặt trước' : 'CCCD mặt sau'),
-          detected: scan.detected,
-          method: scan.method
-        };
-
-        if (state.pendingRetakeId) {
-          replaceScanItem(item);
-          state.pendingRetakeId = null;
-          setStatus(scan.detected ? 'Đã chụp lại và thay ảnh tại vị trí cũ' : 'Đã thay ảnh tại vị trí cũ (mép chưa nhận diện)', scan.detected ? 'success' : 'normal');
-          if (captureType === 'cccd-front') autoReadCccdNumber(item);
-          return;
+        if (!photoBitmap) await raiseFallbackCaptureResolution(track, video);
+        if (photoBitmap) sourceCanvas = photoBitmap;
+        else {
+          sourceCanvas = document.createElement('canvas');
+          sourceCanvas.width = video.videoWidth;
+          sourceCanvas.height = video.videoHeight;
+          if (!sourceCanvas.width || !sourceCanvas.height) throw new Error('Chưa lấy được ảnh. Hãy thử camera hệ thống hoặc chụp lại.');
+          sourceCanvas.getContext('2d').drawImage(video, 0, 0, sourceCanvas.width, sourceCanvas.height);
         }
-
-        addScanItem(item);
-        setStatus(scan.detected ? 'Đã nhận diện và cắt tài liệu' : 'Đã chụp ảnh (không nhận diện được mép)', scan.detected ? 'success' : 'normal');
+        stopCamera('', true);
+        setStatus('Camera đang nghỉ; đang căn chỉnh và kiểm tra ảnh...', 'normal');
+        const scan = await prepareScanAsync(sourceCanvas, { documentType: captureType, preferSpread: captureType === 'document', dpi: captureDpi });
+        if (generation !== scanGeneration) { window.ScanRuntime.releaseCanvas(scan.canvas); return; }
+        const item = {
+          id: state.pendingRetakeId || createScanId(), type: captureType, canvas: scan.canvas,
+          fileName: captureType === 'document' ? 'Ảnh chụp' : (captureType === 'cccd-front' ? 'CCCD mặt trước' : 'CCCD mặt sau'),
+          detected: scan.detected, method: scan.method,
+          processingQuality: { ...(scan.quality || {}), dpi: scan.dpi || 400, effectiveDpi: scan.effectiveDpi },
+          lighting: scan.lighting
+        };
+        await window.ScanRuntime.storeOriginal(item, sourceCanvas, originalBlob);
+        if (generation !== scanGeneration) { window.ScanRuntime.disposeItem(item); return; }
+        keptItem = item;
+        if (state.pendingRetakeId) { replaceScanItem(item); state.pendingRetakeId = null; }
+        else addScanItem(item);
+        const warnings = item.processingQuality.warnings || [];
+        setStatus(warnings.length ? warnings.join(' ') : 'Đã căn chỉnh ảnh. Camera đang nghỉ; bấm chụp để lấy trang tiếp theo.', warnings.length ? 'normal' : 'success');
         if (captureType === 'cccd-front') autoReadCccdNumber(item);
+      } catch (error) {
+        alert('Không chụp được ảnh: ' + error.message);
+        setStatus('Chụp ảnh chưa hoàn tất; vui lòng thử lại.', 'error');
       } finally {
+        if (sourceCanvas && (!keptItem || keptItem.originalCanvas !== sourceCanvas)) window.ScanRuntime.releaseCanvas(sourceCanvas);
+        else if (photoBitmap && photoBitmap !== sourceCanvas) window.ScanRuntime.releaseCanvas(photoBitmap);
         state.processing = false;
       }
     }
@@ -1100,7 +1196,7 @@
       const x = cropNumberArea ? Math.floor(oriented.width * 0.28) : 0;
       const width = oriented.width - x;
       const image = document.createElement('canvas');
-      const scale = Math.min(2, 2400 / width);
+      const scale = Math.min(1.5, 1800 / width);
       const border = 16;
       image.width = Math.round(width * scale) + border * 2;
       image.height = Math.round(oriented.height * scale) + border * 2;
@@ -1123,24 +1219,28 @@
     function autoReadCccdNumber(item) {
       const generation = identityGeneration;
       const initialValue = document.getElementById('soCCCD').value;
-      const isCurrent = () => generation === identityGeneration &&
-        state.cccdPhotos.some(photo => photo.id === item.id && photo === item);
+      const isCurrent = () => generation === identityGeneration && state.cccdPhotos.some(photo => photo === item);
       const task = async () => {
         if (!isCurrent()) return;
+        let loaded = null;
         try {
-          setStatus('Đang đọc mã QR CCCD trên thiết bị...', 'normal');
-          let number = await readCccdQr(item.originalCanvas || item.canvas);
-          if (!number && isCurrent()) number = await readCccdQr(item.canvas);
-          for (const half of ['right', 'left']) {
-            if (number || !isCurrent()) break;
-            // Read original detail before reducing a wide photo to a single probe.
-            number = await readCccdQr(item.originalCanvas || item.canvas, half);
-          }
-          let source = 'QR';
+          setStatus('Đang đọc QR CCCD trên thiết bị...', 'normal');
+          let number = await readCccdQr(item.canvas);
           if (!number && isCurrent()) {
+            loaded = await window.ScanRuntime.loadSource(item, true);
+            number = await readCccdQr(loaded.canvas);
+            for (const half of ['right', 'left']) {
+              if (number || !isCurrent()) break;
+              number = await readCccdQr(loaded.canvas, half);
+            }
+          }
+          if (loaded && loaded.release) loaded.release();
+          loaded = null;
+          let source = 'QR';
+          const manualNumber = document.getElementById('soCCCD').value.trim();
+          if (!number && isCurrent() && !/^\d{12}$/.test(manualNumber)) {
             source = 'OCR';
-            if (!window.Tesseract) throw new Error('Thư viện OCR chưa tải được.');
-            setStatus('QR chưa đọc được; đang đọc số CCCD bằng OCR...', 'normal');
+            if (!window.Tesseract) await loadLocalScript('./assets/vendor/tesseract/tesseract.min.js');
             if (!cccdOcrWorkerPromise) {
               cccdOcrWorkerPromise = window.Tesseract.createWorker('eng', 1, {
                 workerPath: new URL('./assets/vendor/tesseract/worker.min.js', location.href).href,
@@ -1149,47 +1249,32 @@
               }).catch(error => { cccdOcrWorkerPromise = null; throw error; });
             }
             cccdOcrWorker = await cccdOcrWorkerPromise;
-            await cccdOcrWorker.setParameters({ tessedit_pageseg_mode: '11' });
-            const result = await cccdOcrWorker.recognize(item.canvas);
-            number = extractConfidentCccdNumber(result.data);
-            if (!number && isCurrent()) {
-              // Read digits independently of Vietnamese labels and background patterns.
-              await cccdOcrWorker.setParameters({
-                tessedit_pageseg_mode: '11', tessedit_char_whitelist: '0123456789'
-              });
-              try {
-                const rotations = item.canvas.width >= item.canvas.height ? [0, 180] : [90, 270];
-                for (const rotation of rotations) {
-                  if (number || !isCurrent()) break;
-                  setStatus('Đang đọc vùng số CCCD và kiểm tra chiều ảnh...', 'normal');
-                  const prepared = prepareCccdOcrImage(item.canvas, rotation, true);
-                  try {
-                    const digits = await cccdOcrWorker.recognize(prepared);
-                    number = extractConfidentCccdNumber(digits.data);
-                  } finally {
-                    prepared.width = prepared.height = 1;
-                  }
-                  await yieldToInterface();
-                }
-              } finally {
-                await cccdOcrWorker.setParameters({ tessedit_char_whitelist: '' });
+            await cccdOcrWorker.setParameters({ tessedit_pageseg_mode: '11', tessedit_char_whitelist: '0123456789' });
+            try {
+              const rotations = item.canvas.width >= item.canvas.height ? [0, 180] : [90, 270];
+              for (const rotation of rotations) {
+                if (number || !isCurrent() || /^\d{12}$/.test(document.getElementById('soCCCD').value.trim())) break;
+                setStatus('Đang đọc riêng vùng số CCCD...', 'normal');
+                const prepared = prepareCccdOcrImage(item.canvas, rotation, true);
+                try { number = extractConfidentCccdNumber((await cccdOcrWorker.recognize(prepared)).data); }
+                finally { window.ScanRuntime.releaseCanvas(prepared); }
               }
-            }
+              if (!number && isCurrent() && !/^\d{12}$/.test(document.getElementById('soCCCD').value.trim())) {
+                number = extractConfidentCccdNumber((await cccdOcrWorker.recognize(item.canvas)).data);
+              }
+            } finally { await cccdOcrWorker.setParameters({ tessedit_char_whitelist: '' }); }
           }
           if (!isCurrent()) return;
           const input = document.getElementById('soCCCD');
           if (number && input.value === initialValue && (!input.value || input.value === number)) {
             input.value = number;
             setStatus(`Đã đọc số CCCD bằng ${source}; vui lòng kiểm tra trước khi lưu`, 'success');
-          } else if (number && input.value !== number) {
-            setStatus('Số đọc được khác số đã nhập; vui lòng kiểm tra CCCD', 'normal');
-          } else {
-            setStatus('Chưa đọc chắc chắn số CCCD; chụp rõ QR hoặc nhập thủ công', 'normal');
-          }
+          } else if (number && input.value !== number) setStatus('Số đọc được khác số đã nhập; vui lòng kiểm tra CCCD', 'normal');
+          else if (!/^\d{12}$/.test(input.value.trim())) setStatus('Chưa đọc chắc chắn số CCCD; chụp rõ QR hoặc nhập thủ công', 'normal');
         } catch (error) {
-          console.info('Không thể đọc CCCD trên thiết bị.', error);
-          if (isCurrent()) setStatus('Chưa đọc được CCCD; vui lòng nhập số thủ công', 'normal');
-        }
+          console.info('Chưa đọc được CCCD.', error);
+          if (isCurrent()) setStatus('Vui lòng nhập số CCCD để tiếp tục.', 'normal');
+        } finally { if (loaded && loaded.release) loaded.release(); }
       };
       identityQueue = identityQueue.then(task, task);
       return identityQueue;
@@ -1223,90 +1308,55 @@
     async function processImageFiles(fileList) {
       if (state.processing || state.saving) return;
       state.processing = true;
+      if (state.stream || state.cameraWanted) stopCamera('', true);
       const generation = scanGeneration;
       const uploadType = document.getElementById('imageUploadType').value;
+      const importDpi = state.qualityDpi || 400;
       try {
         const files = Array.from(fileList || []).filter(file => file.type && file.type.indexOf('image/') === 0);
-        if (!files.length) return;
-
-        setStatus('Đang xử lý ảnh được chọn...', 'normal');
-        try {
-          const filesToProcess = state.pendingRetakeId ? files.slice(0, 1) : files;
-          for (const file of filesToProcess) {
+        const filesToProcess = state.pendingRetakeId ? files.slice(0, 1) : files;
+        let count = 0;
+        for (const file of filesToProcess) {
+          if (generation !== scanGeneration) break;
+          setStatus(`Đang xử lý ảnh ${count + 1}/${filesToProcess.length}...`, 'normal');
+          const bitmap = await decodeImageFile(file);
+          const sourceCanvas = bitmap;
+          let keptItem = null;
+          try {
             if (generation !== scanGeneration) break;
-            const sourceBitmap = await decodeImageFile(file);
-            try {
-              if (generation !== scanGeneration) break;
-              const sourceCanvas = document.createElement('canvas');
-              sourceCanvas.width = sourceBitmap.width;
-              sourceCanvas.height = sourceBitmap.height;
-              sourceCanvas.getContext('2d').drawImage(sourceBitmap, 0, 0);
-
-              const pendingItem = state.pendingRetakeId
-                ? [...state.documentPages, ...state.cccdPhotos].find(existing => existing.id === state.pendingRetakeId)
-                : null;
-              const itemType = pendingItem ? pendingItem.type : uploadType;
-              const scan = await prepareScanAsync(sourceCanvas, { documentType: itemType, preferSpread: itemType === 'document' });
-              if (generation !== scanGeneration) break;
-              const item = {
-                id: state.pendingRetakeId || createScanId(),
-                type: itemType,
-                canvas: scan.canvas,
-                originalCanvas: sourceCanvas,
-                fileName: file.name,
-                detected: scan.detected,
-                method: scan.method
-              };
-              if (state.pendingRetakeId) {
-                replaceScanItem(item);
-                state.pendingRetakeId = null;
-              } else {
-                addScanItem(item);
-              }
-              if (itemType === 'cccd-front') autoReadCccdNumber(item);
-            } finally {
-              if (sourceBitmap.close) sourceBitmap.close();
-            }
+            const pending = state.pendingRetakeId ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId) : null;
+            const itemType = pending ? pending.type : uploadType;
+            const scan = await prepareScanAsync(sourceCanvas, { documentType: itemType, preferSpread: itemType === 'document', dpi: importDpi });
+            if (generation !== scanGeneration) { window.ScanRuntime.releaseCanvas(scan.canvas); break; }
+            const item = { id: state.pendingRetakeId || createScanId(), type: itemType, canvas: scan.canvas,
+              fileName: file.name, detected: scan.detected, method: scan.method,
+              processingQuality: { ...(scan.quality || {}), dpi: scan.dpi || 400, effectiveDpi: scan.effectiveDpi }, lighting: scan.lighting };
+            await window.ScanRuntime.storeOriginal(item, sourceCanvas, file);
+            if (generation !== scanGeneration) { window.ScanRuntime.disposeItem(item); break; }
+            keptItem = item;
+            if (state.pendingRetakeId) { replaceScanItem(item); state.pendingRetakeId = null; }
+            else addScanItem(item);
+            if (itemType === 'cccd-front') autoReadCccdNumber(item);
+            count++;
+            await yieldToInterface();
+          } finally {
+            if (!keptItem || keptItem.originalCanvas !== sourceCanvas) window.ScanRuntime.releaseCanvas(sourceCanvas);
           }
-
-          setStatus(`Đã xử lý ${filesToProcess.length} ảnh`, 'success');
-          await identityQueue;
-          if (document.getElementById('imageUploadType').value === 'document') {
-            setStatus('Đã xử lý ảnh GCN. Nếu đây là CCCD, hãy chọn CCCD mặt trước rồi tải lại ảnh để đọc số.', 'normal');
-          }
-        } catch (error) {
-          alert('Không xử lý được ảnh: ' + error.message);
-          setStatus('Lỗi xử lý ảnh', 'error');
-        } finally {
-          document.getElementById('imageFiles').value = '';
         }
+        setStatus(`Đã xử lý ${count} ảnh. Bấm “Xem rõ chữ” để kiểm tra chi tiết.`, 'success');
+      } catch (error) {
+        alert('Không xử lý được ảnh: ' + error.message);
+        setStatus('Ảnh chưa xử lý xong; vui lòng thử lại.', 'error');
       } finally {
+        document.getElementById('imageFiles').value = '';
+        const nativeInput = document.getElementById('nativeCameraFile');
+        if (nativeInput) nativeInput.value = '';
         state.processing = false;
       }
     }
 
     async function decodeImageFile(file) {
-      if (typeof createImageBitmap === 'function') {
-        try {
-          return await createImageBitmap(file, { imageOrientation: 'from-image' });
-        } catch (optionsError) {
-          return createImageBitmap(file);
-        }
-      }
-
-      return new Promise((resolve, reject) => {
-        const objectUrl = URL.createObjectURL(file);
-        const image = new Image();
-        image.onload = () => {
-          URL.revokeObjectURL(objectUrl);
-          resolve(image);
-        };
-        image.onerror = () => {
-          URL.revokeObjectURL(objectUrl);
-          reject(new Error(`Không đọc được ảnh ${file.name}.`));
-        };
-        image.src = objectUrl;
-      });
+      return window.ScanRuntime.decodeBlob(file);
     }
 
     function renderImageComparison(originalCanvas, processedCanvas, fileName, scan) {
@@ -1324,10 +1374,11 @@
       document.getElementById('thumbList').prepend(holder);
     }
 
-    function scanCameraPreview() {
-      if (!state.stream) return;
-      state.detectionFrame = setTimeout(scanCameraPreview, 1200);
-      if (state.processing || state.saving) return;
+    async function scanCameraPreview() {
+      const stream = state.stream;
+      if (!stream) return;
+      try {
+      if (state.processing || state.saving || document.hidden) return;
 
       const video = document.getElementById('video');
       if (!video.videoWidth || !video.videoHeight) return;
@@ -1340,7 +1391,17 @@
       previewCanvas.height = Math.max(1, Math.round(video.videoHeight * scale));
       previewCanvas.getContext('2d').drawImage(video, 0, 0, previewCanvas.width, previewCanvas.height);
 
-      const bounds = detectDocumentWithOpenCv(previewCanvas, false, { fast: true, maxDimension: 480 });
+      let bounds;
+      const client = getScanClient();
+      if (client && client.available) {
+        const bitmap = await createImageBitmap(previewCanvas);
+        const result = await client.request({ action: 'PREVIEW', bitmap, options: { fast: true, maxDimension: 480 }, mode: 'opencv' }, [bitmap]);
+        bounds = result && result.bounds;
+      } else {
+        await ensureOpenCv();
+        bounds = detectDocumentWithOpenCv(previewCanvas, false, { fast: true, maxDimension: 480 });
+      }
+      if (state.stream !== stream || state.processing || state.saving) return;
       const overlay = document.querySelector('.overlay');
       if (!bounds || !bounds.detected) {
         overlay.classList.remove('detected');
@@ -1365,6 +1426,10 @@
       overlay.style.top = `${Math.max(0, top)}px`;
       overlay.style.width = `${Math.min(shell.clientWidth - Math.max(0, left), width)}px`;
       overlay.style.height = `${Math.min(shell.clientHeight - Math.max(0, top), height)}px`;
+      } catch (error) { console.info('Tạm bỏ qua xem trước nhận diện.', error); }
+      finally {
+        if (state.stream === stream) state.detectionFrame = setTimeout(scanCameraPreview, 1600);
+      }
     }
 
     function checkCameraColor(video) {
@@ -1420,6 +1485,8 @@
     }
 
     function addScanItem(item) {
+      state.pdfCache = [];
+      state.saveAttempt = null;
       getScanCollection(item.type).push(item);
       renderScanItem(item);
       updateCccdCount();
@@ -1432,14 +1499,19 @@
         addScanItem(item);
         return;
       }
+      state.pdfCache = [];
+      state.saveAttempt = null;
+      window.ScanRuntime.disposeItem(collection[index]);
       collection[index] = item;
       renderScanItem(item);
       updateCccdCount();
     }
 
     function renderScanItem(item) {
-      const originalUrl = createScanPreviewUrl(item.originalCanvas);
-      const processedUrl = createScanPreviewUrl(item.canvas);
+      const originalUrl = item.originalPreviewUrl || createScanPreviewUrl(item.originalCanvas || item.canvas);
+      const processedUrl = item.processedPreviewUrl || createScanPreviewUrl(item.canvas);
+      const quality = item.processingQuality || {};
+      const qualityText = (quality.warnings || []).join(' ');
       const collection = getScanCollection(item.type);
       const slot = collection.findIndex(scan => scan.id === item.id) + 1;
       const label = item.type === 'document'
@@ -1454,7 +1526,9 @@
           <figure><img src="${originalUrl}" alt="Ảnh gốc: ${escapeHtml(item.fileName)}" /><figcaption>Ảnh gốc</figcaption></figure>
           <figure><img src="${processedUrl}" alt="Ảnh đã căn chỉnh: ${escapeHtml(item.fileName)}" /><figcaption>Kết quả căn chỉnh và cân sáng (${escapeHtml(item.method || 'fallback')})</figcaption></figure>
         </div>
+        ${qualityText ? `<div class="helper">${escapeHtml(qualityText)}</div>` : ''}
         <div class="thumb-tools">
+          <button type="button" class="secondary" onclick="reviewScan('${item.id}')">Xem rõ chữ</button>
           <button type="button" class="secondary" onclick="retakeScan('${item.id}')">Chụp lại</button>
           <button type="button" class="secondary" onclick="replaceScanFromFile('${item.id}')">Chọn ảnh khác</button>
           <button type="button" class="delete-scan" onclick="deleteScan('${item.id}')">Xóa ảnh</button>
@@ -1467,7 +1541,7 @@
     }
 
     function createScanPreviewUrl(sourceCanvas) {
-      const maxEdge = 1600;
+      const maxEdge = 1000;
       const scale = Math.min(1, maxEdge / Math.max(sourceCanvas.width, sourceCanvas.height));
       const preview = document.createElement('canvas');
       preview.width = Math.max(1, Math.round(sourceCanvas.width * scale));
@@ -1478,9 +1552,11 @@
 
     function deleteScan(scanId) {
       if (state.processing || state.saving) return;
+      state.pdfCache = [];
+      state.saveAttempt = null;
       [state.documentPages, state.cccdPhotos].forEach(collection => {
         const index = collection.findIndex(item => item.id === scanId);
-        if (index >= 0) collection.splice(index, 1);
+        if (index >= 0) { window.ScanRuntime.disposeItem(collection[index]); collection.splice(index, 1); }
       });
       const card = document.querySelector(`[data-scan-id="${scanId}"]`);
       if (card) card.remove();
@@ -1688,7 +1764,7 @@
         const width = Math.max(1, Math.round(sourceCanvas.width * scale));
         const height = Math.max(1, Math.round(sourceCanvas.height * scale));
         let probe = sourceCanvas;
-        if (scale < 1) {
+        if (scale < 1 || typeof sourceCanvas.getContext !== 'function') {
           probe = document.createElement('canvas');
           probe.width = width;
           probe.height = height;
@@ -1954,6 +2030,9 @@
         Math.hypot(corners[0].x - corners[3].x, corners[0].y - corners[3].y)
       );
       const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
+      if (window.ScanQuality && typeof sourceCanvas.getContext !== 'function') {
+        return window.ScanQuality.warpPerspective(sourceCanvas, corners, output, window.cv);
+      }
       const width = output.width;
       const height = output.height;
       const result = state.scanner.extractPaper(sourceCanvas, Math.round(width), Math.round(height), points);
@@ -1973,6 +2052,7 @@
         Math.hypot(topLeft.x - bottomLeft.x, topLeft.y - bottomLeft.y)
       );
       const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
+      if (window.ScanQuality) return window.ScanQuality.warpPerspective(sourceCanvas, corners, output, cv);
       const warpedCanvas = document.createElement('canvas');
       warpedCanvas.width = output.width;
       warpedCanvas.height = output.height;
@@ -2016,13 +2096,15 @@
 
     function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
       const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
+      const policy = window.ScanQuality.outputPolicy(sourceCanvas, bounds, opts);
+      const targetLongEdge = policy.targetLongEdge;
       let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
         target = bounds.method === 'jscanify'
-          ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, opts.targetLongEdge)
-          : warpDocumentPerspective(sourceCanvas, bounds.corners, opts.targetLongEdge);
+          ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, targetLongEdge)
+          : warpDocumentPerspective(sourceCanvas, bounds.corners, targetLongEdge);
       } else {
-        const output = fitScanDimensions(bounds.width, bounds.height, opts.targetLongEdge);
+        const output = fitScanDimensions(bounds.width, bounds.height, targetLongEdge);
         target = document.createElement('canvas');
         target.width = output.width;
         target.height = output.height;
@@ -2030,71 +2112,13 @@
         context.imageSmoothingQuality = 'high';
         context.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, target.width, target.height);
       }
-      if (state.opencvReady) correctDocumentLighting(target);
-      return { canvas: target, detected: bounds.detected, method: bounds.method };
+      const lighting = state.opencvReady ? correctDocumentLighting(target, opts) : { applied: false, skipped: 'opencv-unavailable' };
+      return { canvas: target, detected: bounds.detected, method: bounds.method,
+        quality: policy.quality, dpi: policy.dpi, effectiveDpi: policy.effectiveDpi, lighting };
     }
 
-    function correctDocumentLighting(canvas) {
-      if (!state.opencvReady) return;
-      const cv = window.cv;
-      const maxAnalysisEdge = 600;
-      const scale = Math.min(1, maxAnalysisEdge / Math.max(canvas.width, canvas.height));
-      const analysis = document.createElement('canvas');
-      analysis.width = Math.max(1, Math.round(canvas.width * scale));
-      analysis.height = Math.max(1, Math.round(canvas.height * scale));
-      analysis.getContext('2d', { willReadFrequently: true }).drawImage(canvas, 0, 0, analysis.width, analysis.height);
-
-      let source;
-      let gray;
-      let illumination;
-      let fullIllumination;
-      try {
-        source = cv.matFromImageData(analysis.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, analysis.width, analysis.height));
-        gray = new cv.Mat();
-        illumination = new cv.Mat();
-        fullIllumination = new cv.Mat();
-        cv.cvtColor(source, gray, cv.COLOR_RGBA2GRAY);
-        const sigma = Math.max(4, Math.min(14, Math.min(analysis.width, analysis.height) * 0.025));
-        cv.GaussianBlur(gray, illumination, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
-
-        const histogram = new Uint32Array(256);
-        for (let index = 0; index < illumination.data.length; index++) histogram[illumination.data[index]]++;
-        const percentileIndex = Math.floor(illumination.data.length * 0.7);
-        let accumulated = 0;
-        let reference = 200;
-        for (let value = 0; value < histogram.length; value++) {
-          accumulated += histogram[value];
-          if (accumulated > percentileIndex) {
-            reference = Math.max(150, Math.min(235, value));
-            break;
-          }
-        }
-
-        cv.resize(illumination, fullIllumination, new cv.Size(canvas.width, canvas.height), 0, 0, cv.INTER_LINEAR);
-        const context = canvas.getContext('2d', { willReadFrequently: true });
-        const image = context.getImageData(0, 0, canvas.width, canvas.height);
-        const pixels = image.data;
-        const lightMap = fullIllumination.data;
-        for (let pixel = 0, index = 0; pixel < lightMap.length; pixel++, index += 4) {
-          const localLight = Math.max(32, lightMap[pixel]);
-          const gain = Math.max(0.78, Math.min(1.28, Math.pow(reference / localLight, 0.65)));
-          const maximumChannel = Math.max(pixels[index], pixels[index + 1], pixels[index + 2]);
-          const minimumChannel = Math.min(pixels[index], pixels[index + 1], pixels[index + 2]);
-          const saturation = maximumChannel ? (maximumChannel - minimumChannel) / maximumChannel : 0;
-          const colorProtection = Math.max(0, 1 - saturation / 0.25);
-          const safeGain = 1 + (gain - 1) * colorProtection;
-          pixels[index] = Math.min(255, pixels[index] * safeGain);
-          pixels[index + 1] = Math.min(255, pixels[index + 1] * safeGain);
-          pixels[index + 2] = Math.min(255, pixels[index + 2] * safeGain);
-        }
-        context.putImageData(image, 0, 0);
-      } catch (err) {
-        console.warn('Lỗi khi cân bằng ánh sáng:', err);
-      } finally {
-        [source, gray, illumination, fullIllumination].forEach(mat => {
-          if (mat && mat.delete) mat.delete();
-        });
-      }
+    function correctDocumentLighting(canvas, options = {}) {
+      return window.ScanQuality.correctLighting(canvas, state.opencvReady ? window.cv : null, options);
     }
 
     function preparePdfImage(canvas, pageWidth, pageHeight) {
@@ -2108,15 +2132,14 @@
     }
 
     async function buildPdfParts(scans, original = false) {
-      const label = original ? 'bản sao trước căn chỉnh' : 'GCN / CCCD';
-      return window.DocumentPdfExporter.exportPdfParts(scans, {
+      const produce = () => window.DocumentPdfExporter.exportPdfParts(scans, {
         original,
+        loadSource: (item, isOriginal) => window.ScanRuntime.loadSource(item, isOriginal),
         onProgress: progress => {
-          if (state.saving && progress.stage === 'encode') {
-            setStatus(`Đang nén PDF ${label}: trang ${progress.pageIndex}/${progress.totalPages}, phần ${progress.partCount}...`, 'normal');
-          }
+          if (state.saving && progress.stage === 'encode') setStatus(`Đang tạo PDF ${original ? 'bản sao' : 'GCN / CCCD'}: trang ${progress.pageIndex}/${progress.totalPages}...`, 'normal');
         }
       });
+      return window.ScanRuntime.cachedPdf(state, scans, original, produce);
     }
 
     async function buildPdfFromScans(scans) {
@@ -2173,21 +2196,93 @@
       return normalized || 'ChuaNhap';
     }
 
-    async function saveCurrentRecord() {
-      if (!state.documentPages.length && !state.cccdPhotos.length) {
-        return saveNoteOnly();
-      }
+    function scanGroupKey(scans, kind) {
+      if (!scans.length) return '';
+      const entries = state.pdfGroupIdentities || (state.pdfGroupIdentities = []);
+      const revisions = scans.map(item => [item.revision || 0, item.processingQuality && item.processingQuality.dpi || 400,
+        item.processedWidth || item.canvas && item.canvas.width, item.processedHeight || item.canvas && item.canvas.height].join(':'));
+      const sources = scans.map(item => kind === 'original' ? item.originalBlob || item.originalCanvas : item.processedBlob || item.canvas);
+      const prior = entries.find(entry => entry.kind === kind && entry.items.length === scans.length &&
+        entry.items.every((item, index) => item === scans[index] && entry.revisions[index] === revisions[index] && entry.sources[index] === sources[index]));
+      if (prior) return prior.key;
+      const key = `${scanSessionId}:${kind}:${ScanSession.createId()}`;
+      entries.push({ kind, items: scans.slice(), revisions, sources, key });
+      while (entries.length > 12) entries.shift();
+      return key;
+    }
 
+    function makeSaveAttempt(payload, requestUrl, groups) {
+      const allGroupKeys = {};
+      Object.keys(groups).forEach(kind => {
+        const key = scanGroupKey(groups[kind], kind);
+        if (key) allGroupKeys[kind] = key;
+      });
+      const signatureData = { ...payload };
+      ['createdAt', 'fileName', 'fileNameCCCD', 'fileNameOriginal', 'fileGCN', 'fileCCCD'].forEach(key => delete signatureData[key]);
+      const previous = state.saveAttempt;
+      const previousSignatureData = { ...signatureData };
+      if (previous && previous.savedRowIndex && previousSignatureData.rowIndex === previous.savedRowIndex) previousSignatureData.rowIndex = previous.initialRowIndex;
+      if (previous && previous.signature === JSON.stringify([requestUrl, previousSignatureData, allGroupKeys])) return previous;
+      // A new transaction starts at the actual selected row, even when the previous save began as an append.
+      const signature = JSON.stringify([requestUrl, signatureData, allGroupKeys]);
+      const saved = state.savedPdfGroups;
+      const sameRecord = saved && saved.url === requestUrl && payload.rowIndex >= 2 && saved.rowIndex === payload.rowIndex;
+      const plannedKeys = {};
+      Object.keys(allGroupKeys).forEach(kind => {
+        if (!sameRecord || saved.keys[kind] !== allGroupKeys[kind]) plannedKeys[kind] = allGroupKeys[kind];
+      });
+      const attempt = { signature, url: requestUrl, id: ScanSession.createId(), payload: { ...payload },
+        initialRowIndex: payload.rowIndex, savedRowIndex: payload.rowIndex, allGroupKeys,
+        plannedKeys, acknowledged: {}, groups, complete: false, uncertain: false, retrySupported: false };
+      state.saveAttempt = attempt;
+      return attempt;
+    }
+
+    function applySaveResult(attempt, result) {
+      if (result.saveRequestId === attempt.id && result.savedPdfGroupKeys) {
+        attempt.retrySupported = true;
+        Object.assign(attempt.acknowledged, result.savedPdfGroupKeys);
+      }
+      attempt.savedRowIndex = Number(result.rowIndex) || attempt.savedRowIndex;
+      attempt.complete = result.pdfUploadComplete !== false;
+      attempt.result = result;
+      attempt.uncertain = false;
+      const rowIndex = attempt.savedRowIndex;
+      if (rowIndex) state.selectedRowIndex = rowIndex;
+      const saved = state.savedPdfGroups;
+      const previousKeys = saved && saved.url === attempt.url && saved.rowIndex === rowIndex ? saved.keys : {};
+      const confirmed = attempt.complete ? attempt.allGroupKeys : attempt.acknowledged;
+      if (rowIndex) state.savedPdfGroups = { url: attempt.url, rowIndex, keys: { ...previousKeys, ...confirmed } };
+      if (result.soCCCD) document.getElementById('soCCCD').value = result.soCCCD;
+      if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
+      if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
+      renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
+      const messages = [result.message || 'Đã lưu hồ sơ.'];
+      if (!attempt.complete) messages.push('Ảnh vẫn được giữ. Bấm lưu lại để tiếp tục những PDF chưa hoàn tất.');
+      else if (!Object.keys(attempt.plannedKeys).length) messages.push('Đã cập nhật thông tin và sử dụng lại các PDF đã lưu.');
+      else messages.push('Mỗi PDF không quá 10 MB. Các phần của từng loại được giữ đúng thứ tự.');
+      if (result.warning) messages.push(result.warning);
+      alert(messages.join('\n'));
+      document.getElementById('btnSaveRecord').textContent = attempt.complete ? 'Cập nhật hồ sơ đã lưu' : 'Lưu tiếp PDF còn thiếu';
+      setStatus(attempt.complete ? 'Đã lưu hồ sơ. Camera đang nghỉ.' : 'Đã lưu thông tin; còn PDF cần lưu tiếp', attempt.complete ? 'success' : 'error');
+    }
+
+    async function saveCurrentRecord() {
+      if (!state.documentPages.length && !state.cccdPhotos.length) return saveNoteOnly();
       if (state.saving || state.processing) return;
       state.saving = true;
       document.getElementById('btnSaveRecord').disabled = true;
+      if (state.stream || state.cameraWanted) stopCamera('', true);
+      let attempt = null;
+      let sending = false;
+      const startTime = performance.now();
       try {
+        setStatus('Đang hoàn tất đọc CCCD và chuẩn bị hồ sơ...', 'normal');
         await identityQueue;
         const requestUrl = getApiUrl();
         if (!requestUrl) throw new Error('Vui lòng nhập Web App URL trước khi thao tác.');
         const documentPages = state.documentPages.slice();
         const cccdPhotos = state.cccdPhotos.slice();
-        // Capture the record once; exporting several parts must not change its row or metadata.
         const payload = {
           tenHuyen: document.getElementById('tenHuyen').value.trim(),
           tenXaCu: document.getElementById('tenXaCu').value.trim(),
@@ -2208,56 +2303,62 @@
           rowIndex: state.selectedRowIndex,
           pageCount: documentPages.length + cccdPhotos.length,
           createdAt: new Date().toISOString(),
-          fileName: buildPdfFileName(),
-          fileNameCCCD: buildCccdPdfFileName(),
-          fileNameOriginal: buildOriginalBackupFileName()
+          fileName: buildPdfFileName(), fileNameCCCD: buildCccdPdfFileName(), fileNameOriginal: buildOriginalBackupFileName()
         };
-
-        setStatus('Đang tạo PDF tối đa 400 dpi, 10 MB mỗi file...', 'normal');
-        // Prepare every group before uploading, so an export error never sends a partial record.
-        const originalParts = await buildOriginalBackupPdf([...documentPages, ...cccdPhotos]);
-        const gcnParts = documentPages.length ? await buildPdfFromScans(documentPages) : [];
-        const cccdParts = cccdPhotos.length ? await buildPdfFromScans(cccdPhotos) : [];
-        Object.assign(payload,
-          pdfUploadFields(originalParts, payload.fileNameOriginal, 'pdfOriginalBase64', 'pdfOriginalFiles'),
-          pdfUploadFields(gcnParts, payload.fileName, 'pdfGCNBase64', 'pdfGCNFiles'),
-          pdfUploadFields(cccdParts, payload.fileNameCCCD, 'pdfCCCDBase64', 'pdfCCCDFiles'));
-        const multipart = [originalParts, gcnParts, cccdParts].some(parts => parts.length > 1);
-        if (multipart) {
-          const capabilities = await apiRequest('PING', {}, requestUrl);
-          if (capabilities.supportsPdfParts !== true || !(capabilities.pdfUploadVersion >= 2)) {
-            throw new Error('Web App chưa hỗ trợ PDF chia phần. Vui lòng triển khai phiên bản code.gs mới rồi lưu lại; ảnh vẫn được giữ trên trang.');
+        attempt = makeSaveAttempt(payload, requestUrl, { original: [...documentPages, ...cccdPhotos], gcn: documentPages, cccd: cccdPhotos });
+        if (attempt.complete) { setStatus('Hồ sơ và PDF đã được lưu; chưa có thay đổi mới.', 'success'); return; }
+        if (attempt.uncertain) {
+          setStatus('Đang kiểm tra lần lưu trước để tránh tải trùng PDF...', 'normal');
+          try {
+            const status = await apiRequest('SAVE_STATUS', { saveRequestId: attempt.id }, requestUrl);
+            if (status.saveRequestId === attempt.id) {
+              attempt.retrySupported = true;
+              Object.assign(attempt.acknowledged, status.savedPdfGroupKeys || {});
+              if (status.rowIndex) attempt.savedRowIndex = status.rowIndex;
+              if (status.pdfUploadComplete) { applySaveResult(attempt, status); return; }
+              if (status.processing) throw Object.assign(new Error('Lần lưu trước vẫn đang chạy trên Google. Vui lòng chờ rồi bấm lưu tiếp.'), { code: 'SAVE_IN_PROGRESS' });
+            }
+          } catch (error) {
+            if (error.code === 'SAVE_IN_PROGRESS') throw error;
+            if (error.code === 'SAVE_RETRY_EXPIRED') {
+              throw new Error('Phiên lưu trước đã hết hạn. Hãy tìm và chọn hồ sơ đã lưu trước khi tiếp tục để tránh tạo trùng. Ảnh vẫn được giữ.');
+            }
+            // Older deployed APIs have no status action; full data remains available for their retry.
           }
+          attempt.uncertain = false;
         }
-        setStatus('Đang lưu các PDF lên Google...', 'normal');
-        const result = await apiRequest('SAVE_SCAN', payload, requestUrl);
-        if (result.soCCCD) document.getElementById('soCCCD').value = result.soCCCD;
-        if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
-        if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
-        renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
-        const messages = [result.message || 'Lưu thành công.'];
-        if (result.pdfUploadComplete === false) {
-          state.selectedRowIndex = result.rowIndex || payload.rowIndex;
-          document.getElementById('btnSaveRecord').textContent = 'Lưu lại PDF cho dòng đã chọn';
-          messages.push('Một số PDF chưa lưu đầy đủ. Ảnh vẫn được giữ để lưu lại vào cùng hồ sơ.');
-        } else if (result.fileGCN || result.fileCCCD || result.fileId) {
-          messages.push('PDF tối đa 400 dpi và 10 MB mỗi file.');
-          if (multipart) messages.push('Các PDF chia phần được lưu theo thứ tự trong thư mục riêng cho từng loại.');
-          if (result.originalBackupSaved) messages.push('Đã lưu bản sao ảnh trước căn chỉnh với cùng mức nén chất lượng cao.');
+        const prepared = {};
+        const exportStart = performance.now();
+        // Stage every needed group before the first write; acknowledged or unchanged PDFs are omitted.
+        for (const kind of ['original', 'gcn', 'cccd']) {
+          if (!attempt.plannedKeys[kind] || (attempt.retrySupported && attempt.acknowledged[kind] === attempt.plannedKeys[kind])) continue;
+          prepared[kind] = kind === 'original' ? await buildOriginalBackupPdf(attempt.groups[kind]) : await buildPdfFromScans(attempt.groups[kind]);
         }
-        if (result.warning) messages.push(result.warning);
-        alert(messages.join('\n'));
-        if (result.pdfUploadComplete === false) {
-          setStatus('Đã lưu thông tin; cần lưu lại PDF còn thiếu', 'error');
-          return;
+        const upload = { ...attempt.payload, saveRequestId: attempt.id, pdfGroupKeys: { ...attempt.plannedKeys } };
+        if (!attempt.retrySupported && attempt.savedRowIndex >= 2) upload.rowIndex = attempt.savedRowIndex;
+        if (prepared.original) Object.assign(upload, pdfUploadFields(prepared.original, upload.fileNameOriginal, 'pdfOriginalBase64', 'pdfOriginalFiles'));
+        if (prepared.gcn) Object.assign(upload, pdfUploadFields(prepared.gcn, upload.fileName, 'pdfGCNBase64', 'pdfGCNFiles'));
+        if (prepared.cccd) Object.assign(upload, pdfUploadFields(prepared.cccd, upload.fileNameCCCD, 'pdfCCCDBase64', 'pdfCCCDFiles'));
+        const multipart = Object.keys(prepared).some(kind => prepared[kind].length > 1);
+        const capabilitiesByUrl = state.apiCapabilities || (state.apiCapabilities = new Map());
+        if (multipart && !capabilitiesByUrl.has(requestUrl)) capabilitiesByUrl.set(requestUrl, await apiRequest('PING', {}, requestUrl));
+        const capabilities = capabilitiesByUrl.get(requestUrl);
+        if (multipart && (!capabilities || capabilities.supportsPdfParts !== true || !(capabilities.pdfUploadVersion >= 2))) {
+          throw new Error('Web App chưa hỗ trợ PDF chia phần. Vui lòng triển khai code.gs mới rồi lưu lại; ảnh vẫn được giữ.');
         }
-
-        state.selectedRowIndex = null;
-        document.getElementById('btnSaveRecord').textContent = 'Lưu PDF GCN + CCCD';
-        setStatus(result.updated ? 'Đã cập nhật hồ sơ' : 'Đã tạo hồ sơ mới', 'success');
+        setStatus('Camera đang nghỉ; đang lưu PDF lên Google...', 'normal');
+        const uploadStart = performance.now();
+        sending = true;
+        const result = await apiRequest('SAVE_SCAN', upload, requestUrl);
+        sending = false;
+        state.lastSaveTiming = { exportMs: uploadStart - exportStart, uploadMs: performance.now() - uploadStart,
+          totalMs: performance.now() - startTime,
+          pdfBytesSent: Object.keys(prepared).reduce((sum, kind) => sum + prepared[kind].reduce((n, part) => n + part.byteLength, 0), 0) };
+        applySaveResult(attempt, result);
       } catch (error) {
-        alert('Lỗi khi lưu PDF: ' + error.message);
-        setStatus('Lưu lỗi', 'error');
+        if (attempt && sending) attempt.uncertain = true;
+        alert('Chưa lưu hoàn tất: ' + error.message);
+        setStatus(error.code === 'SAVE_IN_PROGRESS' ? error.message : 'Lưu chưa hoàn tất; ảnh vẫn được giữ để thử lại.', 'error');
       } finally {
         state.saving = false;
         document.getElementById('btnSaveRecord').disabled = false;
@@ -2287,6 +2388,14 @@
       if (state.saving) { setStatus('Đang lưu hồ sơ, vui lòng chờ hoàn tất.', 'normal'); return; }
       scanGeneration++;
       identityGeneration++;
+      stopCamera();
+      closeScanReview();
+      [...state.documentPages, ...state.cccdPhotos].forEach(item => window.ScanRuntime.disposeItem(item));
+      state.pdfCache = [];
+      state.saveAttempt = null;
+      state.savedPdfGroups = null;
+      state.pdfGroupIdentities = [];
+      window.DocumentPdfExporter.clearCache();
       ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText','searchMapSheetOld','searchPlotOld']
         .forEach(id => { const node = document.getElementById(id); if (node) node.value = ''; });
 
@@ -2302,6 +2411,29 @@
       renderRecordFiles({});
 
       setStatus('Đã xóa form', 'normal');
+    }
+
+    async function reviewScan(scanId) {
+      const item = [...state.documentPages, ...state.cccdPhotos].find(scan => scan.id === scanId);
+      if (!item || state.processing || state.saving) return;
+      if (state.stream || state.cameraWanted) stopCamera('', true);
+      closeScanReview();
+      try {
+        const blob = item.processedBlob || await window.ScanRuntime.canvasBlob(item.canvas, .98);
+        if (![...state.documentPages, ...state.cccdPhotos].includes(item)) return;
+        const dialog = document.getElementById('scanReview');
+        const image = document.getElementById('scanReviewImage');
+        image.src = URL.createObjectURL(blob);
+        dialog.hidden = false;
+        document.getElementById('scanReviewHint').textContent = `Ảnh ${item.processedWidth || item.canvas.width} × ${item.processedHeight || item.canvas.height} px. Cuộn để xem chữ ở kích thước đầy đủ; kiểm tra số thửa, diện tích và ghi chú.`;
+      } catch (error) { alert('Chưa mở được ảnh: ' + error.message); }
+    }
+
+    function closeScanReview() {
+      const dialog = document.getElementById('scanReview');
+      const image = document.getElementById('scanReviewImage');
+      if (image && image.getAttribute('src')) { URL.revokeObjectURL(image.src); image.removeAttribute('src'); }
+      if (dialog) dialog.hidden = true;
     }
 
     function escapeHtml(value) {

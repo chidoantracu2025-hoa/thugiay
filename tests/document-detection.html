@@ -15,6 +15,8 @@
   <script src="../opencv.js"></script>
   <script src="../assets/a4-document-detector.js"></script>
   <script src="../assets/scan-session.js"></script>
+  <script src="../assets/scan-quality.js"></script>
+  <script src="../assets/scan-runtime.js"></script>
   <script src="../assets/vendor/jspdf.umd.min.js"></script>
   <script src="../assets/pdf-export.js"></script>
 </head>
@@ -251,6 +253,39 @@
       assert(binary.length <= window.DocumentPdfExporter.MAX_PDF_BYTES, 'Final PDF exceeds 10 MB');
       return `PDF embeds a 3600×2500 JPEG; ${binary.length} bytes, within 10 MB`;
     }
+    async function verifyOriginalBlobLifecycle(source) {
+      const processed = createCanvas(1800, 1250);
+      processed.getContext('2d').drawImage(source, 0, 0, processed.width, processed.height);
+      const originalBlob = await window.ScanRuntime.canvasBlob(source, .98);
+      const item = { type: 'document', canvas: processed };
+      await window.ScanRuntime.storeOriginal(item, source, originalBlob);
+      assert(item.originalBlob === originalBlob && !item.originalCanvas, 'Original bytes were re-encoded or retained as a full native canvas');
+      assert(item.originalPreviewUrl.startsWith('blob:') && item.processedPreviewUrl.startsWith('blob:'), 'Previews were not stored as lightweight Blob URLs');
+      assert(item.canvas === null && item.processedBlob && item.processedCanonical === true,
+        'Completed A3 page retained a full RGBA canvas instead of a canonical JPEG');
+      assert(processed.width === 0 && item.processedWidth === 1800 && item.processedHeight === 1250,
+        'Processed canvas pixels were not released after JPEG storage');
+      const savedLoadSource = window.ScanRuntime.loadSource;
+      try {
+        window.ScanRuntime.loadSource = (scanItem, original) => {
+          assert(scanItem !== item || original, 'PDF unnecessarily decoded an already encoded canonical A3 JPEG');
+          return savedLoadSource(scanItem, original);
+        };
+        const data = await pdf.createLocalPdf([item]);
+        const binary = atob(data.slice(data.indexOf(',') + 1));
+        assert(/\/Width\s+1800\b/.test(binary) && /\/Height\s+1250\b/.test(binary), 'Canonical JPEG lost its dimensions during direct PDF embedding');
+        assert(binary.length <= window.DocumentPdfExporter.MAX_PDF_BYTES, 'Canonical JPEG PDF exceeded 10 MB');
+      } finally { window.ScanRuntime.loadSource = savedLoadSource; }
+      const decoded = await window.ScanRuntime.loadSource(item, true);
+      assert(decoded.canvas.width === source.width && decoded.canvas.height === source.height, 'Deferred original decode lost dimensions');
+      assert(typeof decoded.canvas.close === 'function', 'Deferred decode copied the full bitmap into another native canvas');
+      decoded.release();
+      assert(decoded.canvas.width === 0 && decoded.canvas.height === 0, 'Deferred original canvas retained its backing store');
+      window.ScanRuntime.disposeItem(item);
+      assert(processed.width === 0 && item.originalBlob === null && item.processedBlob === null, 'Disposal retained source bytes or processed pixels');
+      assert(source.width === 3600 && source.height === 2500, 'Runtime disposed an unowned original source');
+      return 'A3 canvas released; canonical JPEG embeds without decoding; original bitmap closes after use';
+    }
     async function compareConcurrentSessions(canvas) {
       assert(window.ScanSession && typeof window.ScanSession.createWorkerClient === 'function', 'ScanSession script is missing');
       const clients = [
@@ -319,11 +354,11 @@
       const start = html.indexOf('    function detectDocumentBounds(');
       const end = html.indexOf('    function preparePdfImage(', start);
       assert(start >= 0 && end > start, 'Cannot extract the production scan functions');
-      const state = { opencvReady: true, scanner: null, scanMode: 'opencv' };
+      const state = { opencvReady: true, scanner: null, scanMode: 'opencv', pdfCache: [] };
       scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, detectDocumentWithOpenCv, prepareScan };')(state, document, window);
       const pdfEnd = html.indexOf('    function buildPdfFileName(', end);
       assert(pdfEnd > end, 'Cannot extract the production PDF functions');
-      pdf = new Function('window', 'state', html.slice(end, pdfEnd) + '\nreturn { preparePdfImage, createLocalPdf };')(window, { saving: false });
+      pdf = new Function('window', 'state', html.slice(end, pdfEnd) + '\nreturn { preparePdfImage, createLocalPdf };')(window, { saving: false, pdfCache: [] });
       document.getElementById('status').textContent = 'Running generated-image and worker checks…';
       const options = { documentType: 'document', preferSpread: true, targetLongEdge: 800 };
 
@@ -394,8 +429,17 @@
       const nativeFixture = nativeDetailFixture();
       displayFixture('Fine-text quality fixture', nativeFixture);
       await check('High-quality JPEG retains fine text below the DPI ceiling', () => verifyHighQualityJpeg(nativeFixture));
+      await check('Evenly lit documents skip the expensive illumination correction', () => {
+        const before = nativeFixture.getContext('2d').getImageData(1750, 1250, 64, 16).data;
+        const result = window.ScanQuality.correctLighting(nativeFixture, cvModule);
+        assert(!result.applied && result.skipped === 'even-light', 'Even white paper triggered a full lighting pass');
+        const after = nativeFixture.getContext('2d').getImageData(1750, 1250, 64, 16).data;
+        assert(before.every((value, index) => value === after[index]), 'Skipped lighting altered the color-stroke fixture');
+        return 'small lighting probe only; original color strokes unchanged';
+      });
       await check('PDF image export respects 400 dpi without modifying the source', () => verify400Dpi(nativeFixture));
       await check('Compressed PDF preserves below-ceiling dimensions and stays within 10 MB', () => verifyCompressedPdf(nativeFixture));
+      await check('Original image Blobs decode on demand and release owned resources', () => verifyOriginalBlobLifecycle(nativeFixture));
 
       const sample = new URLSearchParams(location.search).get('sample');
       if (sample) {

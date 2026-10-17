@@ -5,7 +5,7 @@ const window = self;
 const HTMLCanvasElement = OffscreenCanvas;
 const HTMLImageElement = class {};
 const state = { opencvReady: false, scanner: null, scanMode: 'opencv' };
-importScripts('../opencv.js', '../jscanify.min.js', './a4-document-detector.js');
+importScripts('../opencv.js', '../jscanify.min.js', './a4-document-detector.js', './scan-quality.js');
 const ready = Promise.resolve(self.cv).then(module => {
   window.cv = module;
   state.opencvReady = Boolean(module && module.Mat && module.findContours);
@@ -24,21 +24,42 @@ async function processScanRequest(data) {
   if (typeof data.sessionId === 'string') envelope.sessionId = data.sessionId;
   let bitmapClosed = false;
   let output = null;
+  let source = null;
+  let scan = null;
+  let sourceIsBitmap = false;
   try {
     await ready;
     state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
-    const source = new OffscreenCanvas(bitmap.width, bitmap.height);
-    source.getContext('2d').drawImage(bitmap, 0, 0);
-    bitmap.close();
-    bitmapClosed = true;
-    const scan = prepareScan(source, options, state.scanMode);
+    // A large native RGBA canvas can cost 100+ MB. All production detection probes and the
+    // bounded warp accept CanvasImageSource, so keep the transferred bitmap until they finish.
+    sourceIsBitmap = typeof ImageBitmap !== 'undefined' && bitmap instanceof ImageBitmap &&
+      Math.max(bitmap.width, bitmap.height) > 960;
+    source = sourceIsBitmap ? bitmap : new OffscreenCanvas(bitmap.width, bitmap.height);
+    if (!sourceIsBitmap) {
+      source.getContext('2d').drawImage(bitmap, 0, 0);
+      bitmap.close();
+      bitmapClosed = true;
+    }
+    if (data.action === 'PREVIEW') {
+      const settings = Object.assign({}, options, { fast: true, maxDimension: 480 });
+      const bounds = state.scanMode === 'fallback' ? detectDocumentByColorFallback(source)
+        : detectDocumentWithOpenCv(source, false, settings) || detectDocumentByColorFallback(source);
+      self.postMessage(Object.assign({}, envelope, { bounds }));
+      return;
+    }
+    scan = prepareScan(source, options, state.scanMode);
     output = scan.canvas.transferToImageBitmap();
-    self.postMessage(Object.assign({}, envelope, { bitmap: output, detected: scan.detected, method: scan.method }), [output]);
+    self.postMessage(Object.assign({}, envelope, { bitmap: output, detected: scan.detected,
+      method: scan.method, quality: scan.quality, dpi: scan.dpi, effectiveDpi: scan.effectiveDpi,
+      lighting: scan.lighting }), [output]);
     output = null;
   } catch (error) {
-    if (!bitmapClosed && bitmap && typeof bitmap.close === 'function') bitmap.close();
     if (output) output.close();
     self.postMessage(Object.assign({}, envelope, { error: String(error) }));
+  } finally {
+    if (!bitmapClosed && bitmap && typeof bitmap.close === 'function') bitmap.close();
+    if (scan && scan.canvas && scan.canvas !== source) { scan.canvas.width = 0; scan.canvas.height = 0; }
+    if (source && !sourceIsBitmap) { source.width = 0; source.height = 0; }
   }
 }
     function detectDocumentBounds(sourceCanvas, mode = state.scanMode, options = {}) {
@@ -224,7 +245,7 @@ async function processScanRequest(data) {
         const width = Math.max(1, Math.round(sourceCanvas.width * scale));
         const height = Math.max(1, Math.round(sourceCanvas.height * scale));
         let probe = sourceCanvas;
-        if (scale < 1) {
+        if (scale < 1 || typeof sourceCanvas.getContext !== 'function') {
           probe = document.createElement('canvas');
           probe.width = width;
           probe.height = height;
@@ -490,6 +511,9 @@ async function processScanRequest(data) {
         Math.hypot(corners[0].x - corners[3].x, corners[0].y - corners[3].y)
       );
       const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
+      if (window.ScanQuality && typeof sourceCanvas.getContext !== 'function') {
+        return window.ScanQuality.warpPerspective(sourceCanvas, corners, output, window.cv);
+      }
       const width = output.width;
       const height = output.height;
       const result = state.scanner.extractPaper(sourceCanvas, Math.round(width), Math.round(height), points);
@@ -509,6 +533,7 @@ async function processScanRequest(data) {
         Math.hypot(topLeft.x - bottomLeft.x, topLeft.y - bottomLeft.y)
       );
       const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
+      if (window.ScanQuality) return window.ScanQuality.warpPerspective(sourceCanvas, corners, output, cv);
       const warpedCanvas = document.createElement('canvas');
       warpedCanvas.width = output.width;
       warpedCanvas.height = output.height;
@@ -552,13 +577,15 @@ async function processScanRequest(data) {
 
     function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
       const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
+      const policy = window.ScanQuality.outputPolicy(sourceCanvas, bounds, opts);
+      const targetLongEdge = policy.targetLongEdge;
       let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
         target = bounds.method === 'jscanify'
-          ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, opts.targetLongEdge)
-          : warpDocumentPerspective(sourceCanvas, bounds.corners, opts.targetLongEdge);
+          ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, targetLongEdge)
+          : warpDocumentPerspective(sourceCanvas, bounds.corners, targetLongEdge);
       } else {
-        const output = fitScanDimensions(bounds.width, bounds.height, opts.targetLongEdge);
+        const output = fitScanDimensions(bounds.width, bounds.height, targetLongEdge);
         target = document.createElement('canvas');
         target.width = output.width;
         target.height = output.height;
@@ -566,11 +593,13 @@ async function processScanRequest(data) {
         context.imageSmoothingQuality = 'high';
         context.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, target.width, target.height);
       }
-      if (state.opencvReady) correctDocumentLighting(target);
-      return { canvas: target, detected: bounds.detected, method: bounds.method };
+      const lighting = state.opencvReady ? correctDocumentLighting(target, opts) : { applied: false, skipped: 'opencv-unavailable' };
+      return { canvas: target, detected: bounds.detected, method: bounds.method,
+        quality: policy.quality, dpi: policy.dpi, effectiveDpi: policy.effectiveDpi, lighting };
     }
 
-    function correctDocumentLighting(canvas) {
+    function correctDocumentLighting(canvas, options = {}) {
+      if (window.ScanQuality) return window.ScanQuality.correctLighting(canvas, state.opencvReady ? window.cv : null, options);
       if (!state.opencvReady) return;
       const cv = window.cv;
       const maxAnalysisEdge = 600;

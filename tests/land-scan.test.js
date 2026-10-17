@@ -70,11 +70,14 @@ function qualityHarness(source) {
   let bounds;
   const document = { createElement: () => { const value = canvas(); scratch.push(value); return value; } };
   const window = { document, jspdf: { jsPDF: PDF }, cv,
-    setTimeout: callback => callback(), btoa: value => Buffer.from(value, 'binary').toString('base64') };
+    setTimeout: callback => callback(), btoa: value => Buffer.from(value, 'binary').toString('base64'),
+    atob: value => Buffer.from(value, 'base64').toString('binary') };
   const context = vm.createContext({ document, window, state,
     detectDocumentBounds: () => bounds,
     correctDocumentLighting() {}, yieldToInterface: () => Promise.resolve(), setStatus() {} });
   vm.runInContext(fs.readFileSync(path.join(root, 'assets/pdf-export.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'assets/scan-quality.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'assets/scan-runtime.js'), 'utf8'), context);
   const names = ['preparePdfImage', 'createLocalPdf', 'buildPdfParts', 'buildPdfFromScans', 'buildOriginalBackupPdf', 'fitScanDimensions',
     'extractDocumentWithJscanify', 'warpDocumentPerspective', 'prepareScan'];
   vm.runInContext(names.map(name => functionCode(name, source)).join('\n'), context);
@@ -105,14 +108,22 @@ async function assertNativeQuality(file) {
   const source = harness.canvas(6600, 4800, 'source');
   const bounds = { x: 100, y: 100, width: 6200, height: 4300, detected: true, method: 'fallback' };
   harness.setBounds(bounds);
-  assert.deepStrictEqual(dimensions(context.prepareScan(source).canvas), [6200, 4300], file + ': default cropping preserves the cropped image pixels.');
+  assert.deepStrictEqual(dimensions(context.prepareScan(source, { optimize: false }).canvas), [6200, 4300], file + ': diagnostic cropping can preserve the cropped native pixels.');
   assert.deepStrictEqual(dimensions(context.prepareScan(source, { targetLongEdge: 3100 }).canvas), [3100, 2150]);
   const corners = [{ x: 100, y: 100 }, { x: 6300, y: 100 }, { x: 6300, y: 4400 }, { x: 100, y: 4400 }];
   for (const method of ['jscanify', 'opencv']) {
     harness.setBounds(Object.assign({}, bounds, { method, corners }));
-    assert.deepStrictEqual(dimensions(context.prepareScan(source).canvas), [6200, 4300], file + ': ' + method + ' preserves native perspective-corrected dimensions.');
+    assert.deepStrictEqual(dimensions(context.prepareScan(source, { optimize: false }).canvas), [6200, 4300], file + ': ' + method + ' supports native diagnostic dimensions.');
     assert.deepStrictEqual(dimensions(context.prepareScan(source, { targetLongEdge: 3100 }).canvas), [3100, 2150]);
   }
+  const largeSource = harness.canvas(10000, 8000, 'large-source');
+  const largeBounds = { x: 200, y: 300, width: 9000, height: 6400, detected: true, method: 'fallback' };
+  harness.setBounds(largeBounds);
+  const capped = context.prepareScan(largeSource, { documentType: 'document' });
+  assert.strictEqual(capped.dpi, 400, file + ': production prioritizes 400 dpi for A3 details.');
+  assert(capped.canvas.width <= 420 / 25.4 * 400 + 1 && capped.canvas.height <= 297 / 25.4 * 400 + 1,
+    file + ': A3 processing is capped before lighting/PDF work rather than retaining every sensor pixel.');
+  assert(capped.canvas.width > 6000, file + ': optimization retains enough pixels for small A3 text.');
 
   const scans = [
     { type: 'document', canvas: harness.canvas(6000, 4243, 'landscape-processed'), originalCanvas: harness.canvas(7200, 5100, 'landscape-original') },
@@ -127,7 +138,7 @@ async function assertNativeQuality(file) {
   assert.deepStrictEqual(harness.images.map(dimensions), [[6000, 4243], [4243, 6000], [1347, 850], [850, 1347], [1200, 849]],
     file + ': export respects 400 dpi at the actual page/card size and never upscales smaller sources.');
   assert.deepStrictEqual(harness.images.map(image => image.content), scans.map(item => item.canvas.content), file + ': normal PDFs use processed images.');
-  assert(harness.images.every(image => image.type === 'image/jpeg' && image.quality === 0.98), file + ': normal PDF images use high quality JPEG.');
+  assert(harness.images.every(image => image.type === 'image/jpeg' && image.quality === 0.96), file + ': normal PDF images use high quality JPEG.');
   assert(localPages.every(image => image.type === 'JPEG'), file + ': jsPDF receives JPEG images.');
   assert.deepStrictEqual(localPages.map(page => [page.format, page.orientation]), [
     ['a3', 'landscape'], ['a3', 'portrait'], ['a4', 'portrait'], ['a4', 'portrait'], ['a3', 'landscape']
@@ -142,21 +153,22 @@ async function assertNativeQuality(file) {
   const backupPages = inspectPdfPart(backup[0]);
   assert.strictEqual(backup[0].pageCount, scans.length);
   assert.strictEqual(backup[0].dpi, 400);
-  assert.strictEqual(backup[0].quality, 0.98);
+  assert.strictEqual(backup[0].quality, 0.96);
   assert.deepStrictEqual(backupPages.map(page => [page.format, page.orientation]), localPages.map(page => [page.format, page.orientation]));
   const originals = harness.images.slice(priorImages);
   assert.strictEqual(originals.length, scans.length);
   assert.deepStrictEqual(originals.map(dimensions), [[6603, 4677], [4677, 6603], [1347, 850], [850, 1347], [1200, 849]],
     file + ': original backups also use the 400 dpi ceiling rather than unlimited native pixels.');
   assert.deepStrictEqual(originals.map(image => image.content), scans.map(item => item.originalCanvas.content), file + ': backups use original rather than processed pixels.');
-  assert(originals.every(image => image.type === 'image/jpeg' && image.quality === 0.98));
+  assert(originals.every(image => image.type === 'image/jpeg' && image.quality === 0.96));
 
   const explicit = context.preparePdfImage(harness.canvas(10000, 5000, 'dpi-ceiling'), 254, 127);
   assert.deepStrictEqual([explicit.pixelWidth, explicit.pixelHeight], [4000, 2000], file + ': the compatibility image helper delegates to the 400 dpi exporter.');
-  assert.strictEqual(harness.images[harness.images.length - 1].quality, 0.98);
+  assert.strictEqual(harness.images[harness.images.length - 1].quality, 0.96);
 
   // The core exporter suite covers byte boundaries/retries; this verifies that each page's adapters keep every part.
   harness.setPageBytes(6000000);
+  context.state.pdfCache = [];
   const parts = await context.buildPdfFromScans(scans.slice(0, 2));
   assert.strictEqual(parts.length, 2, file + ': the saving helper returns all PDF parts.');
   assert.deepStrictEqual(Array.from(parts, part => part.pageCount), [1, 1]);
@@ -169,27 +181,117 @@ async function assertNativeQuality(file) {
 }
 async function assertNativeCamera(file) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
-  const video = { width: 320, height: 240, videoWidth: 4032, videoHeight: 3024 };
-  const draws = [], added = [];
-  const makeCanvas = () => ({ width: 1, height: 1, getContext: () => ({ drawImage: (...args) => draws.push(args) }) });
-  const scanCanvas = makeCanvas();
-  const state = { processing: false, saving: false, pendingRetakeId: null, stream: null, documentPages: [], cccdPhotos: [] };
-  const context = vm.createContext({ state, window: {}, scanGeneration: 0,
-    document: { getElementById: id => id === 'video' ? video : scanCanvas, createElement: makeCanvas },
-    prepareScanAsync: async (canvas, options) => {
-      assert.deepStrictEqual([canvas.width, canvas.height], [4032, 3024]);
-      assert.strictEqual(options.targetLongEdge, undefined, 'Camera scans must not impose an output cap.');
-      return { canvas, detected: true, method: 'opencv' };
-    },
-    createScanId: () => 'camera-test', addScanItem: item => added.push(item), setStatus() {},
-    alert: message => { throw new Error(message); }
-  });
-  vm.runInContext(functionCode('capturePage', source), context);
-  await context.capturePage('document');
-  assert.strictEqual(draws[0][0], video, file + ': video fallback draws the actual video source.');
-  assert.strictEqual(added.length, 1);
-  assert.deepStrictEqual([added[0].originalCanvas.width, added[0].originalCanvas.height], [4032, 3024]);
-  assert.strictEqual(state.processing, false, file + ': capture releases the processing state.');
+  for (const stillPhoto of [true, false]) {
+    const events = [], added = [], canvases = [], revoked = [], bitmaps = [], processingSources = [], processingOutputs = [];
+    const video = { width: 320, height: 240, videoWidth: 4032, videoHeight: 3024,
+      pause() { events.push('pause'); }, srcObject: {} };
+    const track = { stop() { events.push('stop'); } };
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+    const buttons = {};
+    const makeCanvas = () => {
+      const canvas = { width: 1, height: 1, draws: [] };
+      canvas.getContext = () => ({ drawImage() { canvas.draws.push(Array.prototype.slice.call(arguments)); } });
+      canvas.toBlob = (callback, type, quality) => callback({ type, quality, size: 1000, width: canvas.width, height: canvas.height });
+      canvases.push(canvas);
+      return canvas;
+    };
+    const document = {
+      getElementById(id) { if (id === 'video') return video; return buttons[id] || (buttons[id] = { disabled: false }); },
+      createElement: makeCanvas,
+      querySelector: () => ({ classList: { remove() {} }, style: {} })
+    };
+    const state = { processing: false, saving: false, pendingRetakeId: null, stream,
+      documentPages: [], cccdPhotos: [], cameraWanted: true, detectionFrame: 25, cameraIdleTimer: 26 };
+    const originalBlob = { type: 'image/jpeg', size: 3000000 };
+    const window = { document, URL: { createObjectURL: () => 'blob:preview-' + canvases.length,
+      revokeObjectURL: url => revoked.push(url) } };
+    const context = vm.createContext({ state, window, document, scanGeneration: 0,
+      clearTimeout: id => { events.push('clear-' + id); },
+      waitForCameraFrame: async () => {},
+      raiseFallbackCaptureResolution: async () => { events.push('raise-resolution'); },
+      decodeImageFile: async blob => {
+        assert.strictEqual(blob, originalBlob);
+        assert.strictEqual(state.stream, null, file + ': camera rests before decoding the still photo.');
+        const bitmap = { width: 8000, height: 6000, closed: 0, close() { this.closed++; } };
+        bitmaps.push(bitmap);
+        return bitmap;
+      },
+      prepareScanAsync: async (canvas, options) => {
+        processingSources.push(canvas);
+        assert.deepStrictEqual([canvas.width, canvas.height], stillPhoto ? [8000, 6000] : [4032, 3024]);
+        assert.strictEqual(state.stream, null, file + ': the sensor is stopped before CPU-heavy image processing.');
+        assert.strictEqual(options.targetLongEdge, undefined, file + ': physical A3 DPI policy chooses the cap rather than a generic thumbnail limit.');
+        assert.strictEqual(options.documentType, 'document');
+        events.push('process');
+        const processed = makeCanvas(); processed.width = 3500; processed.height = 2500;
+        processingOutputs.push(processed);
+        return { canvas: processed, detected: true, method: 'opencv', dpi: 400, effectiveDpi: 300 };
+      },
+      createScanId: () => 'camera-test', addScanItem: item => added.push(item), setStatus() {},
+      autoReadCccdNumber() {}, startCamera: async () => { events.push('reopen'); state.stream = stream; },
+      alert: message => { throw new Error(message); }
+    });
+    if (stillPhoto) {
+      const ImageCapture = function () {
+        this.getPhotoCapabilities = async () => ({ imageWidth: { min: 1, max: 12000, step: 1 }, imageHeight: { min: 1, max: 9000, step: 1 } });
+        this.takePhoto = async settings => {
+          assert(settings.imageWidth * settings.imageHeight <= 42000000, file + ': still capture avoids unnecessarily enabling the largest sensor mode.');
+          events.push('take-photo');
+          return originalBlob;
+        };
+      };
+      window.ImageCapture = ImageCapture;
+      context.ImageCapture = ImageCapture;
+    }
+    vm.runInContext(fs.readFileSync(path.join(root, 'assets/scan-runtime.js'), 'utf8'), context);
+    vm.runInContext(['createCameraConstraints', 'stopCamera', 'capturePage'].map(name => functionCode(name, source)).join('\n'), context);
+    const constraints = context.createCameraConstraints();
+    assert.strictEqual(constraints.frameRate.ideal, 10);
+    assert.strictEqual(constraints.frameRate.max, 15);
+    assert.strictEqual(constraints.width.ideal, stillPhoto ? 1280 : 1920);
+    await context.capturePage('document');
+    assert.strictEqual(added.length, 1);
+    assert.strictEqual(events.filter(event => event === 'stop').length, 1, file + ': the active track is stopped once.');
+    assert(events.indexOf('stop') < events.indexOf('process'));
+    assert(events.indexOf('clear-25') >= 0 && state.detectionFrame === 0, file + ': preview detection stops with the camera.');
+    assert.strictEqual(video.srcObject, null);
+    assert.strictEqual(state.cameraWanted, true, file + ': the next capture may reopen the camera.');
+    assert.strictEqual(buttons.btnCapturePage.disabled, false);
+    assert.strictEqual(state.processing, false);
+    const item = added[0];
+    assert.strictEqual(item.originalCanvas, undefined, file + ': successful captures retain a compressed original instead of a full RGBA canvas.');
+    if (stillPhoto) assert.strictEqual(item.originalBlob, originalBlob);
+    else assert.strictEqual(item.originalBlob.quality, .98, file + ': video fallback stores its native frame once at high quality.');
+    assert(item.originalBlob && item.originalBlob.type === 'image/jpeg');
+    assert.deepStrictEqual([item.originalWidth, item.originalHeight], stillPhoto ? [8000, 6000] : [4032, 3024]);
+    assert.strictEqual(item.processingQuality.dpi, 400);
+    assert.strictEqual(item.canvas, null, file + ': completed A3 scans release their large RGBA canvases.');
+    assert(item.processedBlob && item.processedBlob.type === 'image/jpeg', file + ': the processed A3 remains available as an encoded JPEG.');
+    assert.deepStrictEqual([item.processedWidth, item.processedHeight], [3500, 2500]);
+    assert.strictEqual(item.processedCanonical, true);
+    assert.strictEqual(item.processedQuality, .96);
+    assert.strictEqual(processingOutputs[0].width, 0);
+    if (stillPhoto) {
+      assert.strictEqual(processingSources[0], bitmaps[0], file + ': processing consumes the still bitmap directly instead of copying it to a full native canvas.');
+      assert.strictEqual(bitmaps[0].closed, 1);
+      assert(!canvases.some(canvas => canvas.width === 8000 || canvas.height === 6000));
+    } else {
+      assert.strictEqual(canvases[0].width, 0, file + ': native video-frame canvas releases its pixel store after capture.');
+      assert.strictEqual(canvases[0].draws[0][0], video, file + ': fallback uses native video dimensions rather than CSS preview dimensions.');
+    }
+    window.ScanRuntime.disposeItem(item);
+    assert.strictEqual(item.processedBlob, null);
+    assert.strictEqual(revoked.length, 2, file + ': disposing a scan revokes both preview URLs.');
+    state.saving = true;
+    await context.capturePage('document');
+    assert.strictEqual(added.length, 1, file + ': saving blocks extra captures without reopening the sensor.');
+    state.saving = false;
+    await context.capturePage('document');
+    assert.strictEqual(added.length, 2, file + ': the following page can be captured after the cooling pause.');
+    assert.strictEqual(events.filter(event => event === 'reopen').length, 1);
+    assert.strictEqual(state.stream, null, file + ': the reopened sensor also stops after its one capture.');
+    window.ScanRuntime.disposeItem(added[1]);
+  }
 }
 
 const ocrContext = vm.createContext({});
@@ -229,5 +331,5 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
   assert.strictEqual(result.soCCCD, '000000000000');
   assert.strictEqual(result.fileId, '1');
   assert.strictEqual(result.updated, false);
-  console.log('PASS: QR/OCR, native scans/camera, 400 dpi JPEG PDF adapters and split parts under 10 MB, page/card dimensions and legacy save response');
+  console.log('PASS: QR/OCR, native diagnostics/A3 400 dpi processing, cool camera lifecycle and direct bitmap/Blob ownership, JPEG/PDF cache adapters, ordered 10 MB parts and legacy save');
 })().catch(error => { console.error(error); process.exitCode = 1; });

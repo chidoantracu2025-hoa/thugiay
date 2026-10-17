@@ -3,6 +3,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 const source = fs.readFileSync(path.join(__dirname, '..', 'code.gs'), 'utf8');
 
 function fixture(options) {
@@ -16,7 +17,13 @@ function fixture(options) {
     beforeAcquire: null, onSave: null, onRelease: null,
     failWrite: false, failFlush: false, failWait: false, failFolderSharing: false
   };
+  test.properties = {};
+  test.cache = {};
+  test.nameLookups = 0;
+  test.idLookups = 0;
+  test.now = Date.now();
   function rootFolder(folder) {
+    if (!folder.getId) folder.getId = function () { return 'root-folder'; };
     folder.createFolder = function (name) {
       assert(!test.held, 'PDF group folder creation must not hold the sheet lock');
       const id = 'folder-' + (test.childFolders.length + 1);
@@ -42,7 +49,10 @@ function fixture(options) {
   }
   const sheet = {
     getLastRow: function () { return test.rows.length; },
-    appendRow: function (row) { write(); test.rows.push(Array.from(row)); },
+    appendRow: function (row) {
+      write(); test.rows.push(Array.from(row));
+      if (test.failAppendAfterCommit) { test.failAppendAfterCommit = false; throw new Error('append response lost'); }
+    },
     getRange: function (row, column, height, width) {
       assert(Number.isInteger(row) && row > 0 && Number.isInteger(column) && column > 0);
       height = height || 1; width = width || 1;
@@ -75,6 +85,35 @@ function fixture(options) {
     }
   };
   const context = vm.createContext({
+    clockNow: function () { return test.now; },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
+      computeDigest: function (algorithm, value) { return Array.from(crypto.createHash(algorithm).update(value).digest()); },
+      getUuid: function () { return crypto.randomBytes(16).toString('hex'); }
+    },
+    PropertiesService: {
+      getScriptProperties: function () {
+        return {
+          getProperty: function (key) { return test.properties[key] || null; },
+          setProperty: function (key, value) {
+            assert(test.held, 'Request state mutations need a short lock');
+            if (test.onPropertyWrite) test.onPropertyWrite(key, value);
+            assert(Buffer.byteLength(value, 'utf8') < 9000, 'Script property exceeds the per-value quota');
+            test.properties[key] = value;
+          },
+          deleteProperty: function (key) { assert(test.held); delete test.properties[key]; }
+        };
+      }
+    },
+    CacheService: {
+      getScriptCache: function () {
+        return {
+          get: function (key) { return test.cache[key] || null; },
+          put: function (key, value) { test.cache[key] = value; },
+          remove: function (key) { delete test.cache[key]; }
+        };
+      }
+    },
     ContentService: {
       MimeType: { JSON: 'json' },
       createTextOutput: function (text) {
@@ -114,8 +153,15 @@ function fixture(options) {
     DriveApp: {
       Access: { ANYONE_WITH_LINK: 'anyone' }, Permission: { VIEW: 'view' },
       getFoldersByName: function () {
+        test.nameLookups++;
         const folders = test.folders.slice();
         return { hasNext: function () { return folders.length > 0; }, next: function () { return folders.shift(); } };
+      },
+      getFolderById: function (id) {
+        test.idLookups++;
+        const folder = test.folders.concat(test.childFolders).find(function (item) { return item.getId && item.getId() === id; });
+        if (!folder) throw new Error('folder missing');
+        return folder;
       },
       createFolder: function () {
         assert(test.held, 'Folder creation must hold the script lock');
@@ -124,11 +170,12 @@ function fixture(options) {
       }
     }
   });
+  vm.runInContext('Date.now = function () { return clockNow(); };', context);
   vm.runInContext(source, context);
-  context.savePdfToDrive = function (folder, data, name) {
+  context.savePdfToDrive = function (folder, data, name, inheritsSharing) {
     assert(!test.held, 'Slow PDF uploads must not hold the shared script lock');
     const saved = { fileId: 'file-' + (test.files.length + 1), fileUrl: 'local-file-' + (test.files.length + 1) };
-    test.files.push({ name: name, data: data, saved: saved, folder: folder });
+    test.files.push({ name: name, data: data, saved: saved, folder: folder, inheritsSharing: inheritsSharing });
     if (test.onSave) test.onSave(name, saved);
     return saved;
   };
@@ -295,6 +342,8 @@ function parts(prefix) {
   ]);
   test.files.forEach(function (file, index) { assert.strictEqual(file.folder, test.childFolders[Math.floor(index / 2)]); });
   assert(test.childFolders.every(function (folder) { return folder.shared; }));
+  assert(test.files.every(function (file) { return file.inheritsSharing === true; }),
+    'Files inherit public view from their successfully shared part folder');
   assert.strictEqual(result.originalBackupSaved, true);
   assert.strictEqual(result.fileId, 'folder-1');
   assert.strictEqual(result.fileUrl, 'local-folder-1');
@@ -363,6 +412,8 @@ function parts(prefix) {
   assert.strictEqual(result.pdfUploadComplete, true);
   assert.strictEqual(result.fileGCN, 'local-folder-1');
   assert(result.warning.indexOf('folder sharing unavailable') >= 0);
+  assert(test.files.every(function (file) { return file.inheritsSharing === false; }),
+    'Individual file sharing remains enabled when sharing the folder fails');
 }
 
 // Size is decoded PDF bytes, including correct base64 padding, not JSON/data URI length.
@@ -423,3 +474,326 @@ function parts(prefix) {
   assert.strictEqual(test.acquired, 0);
 }
 console.log('PASS: concurrent row ownership, PDF part folders/order/isolation, 10 MB validation before writes, partial failures and lock cleanup');
+
+function retryPayload(overrides) {
+  return Object.assign({ saveRequestId: 'save_request_0123456789',
+    pdfGroupKeys: { original: 'session:original:1', gcn: 'session:gcn:1' },
+    fileName: 'retry.pdf', fileNameOriginal: 'retry-original.pdf',
+    hoTenCSD: 'retry owner', createdAt: '2026-10-17T10:00:00.000Z',
+    pdfOriginalBase64: 'AA==', pdfGCNBase64: 'BB==' }, overrides || {});
+}
+
+// Editing metadata alone keeps the real backup filename and existing Drive links.
+{
+  const test = fixture({ rows: [new Array(24).fill('HEADER'), record()] });
+  const result = test.server.saveScanRecord({ rowIndex: 2, saveRequestId: 'metadata_only_request_0123456789',
+    pdfGroupKeys: {}, fileName: 'unused-new-GCN-name.pdf', hoTenCSD: 'updated owner' });
+  assert.strictEqual(result.pdfUploadComplete, true);
+  assert.strictEqual(test.rows[1][16], 'original.pdf');
+  assert.strictEqual(result.fileGCN, 'old GCN');
+  assert.strictEqual(result.fileCCCD, 'old CCCD');
+  assert.strictEqual(test.files.length, 0);
+  assert.strictEqual(test.nameLookups, 0);
+}
+
+// A response lost after saving can be retried with all bytes, without extra rows/files.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  const first = test.server.saveScanRecord(payload);
+  const lockCount = test.acquired;
+  const repeated = test.server.saveScanRecord(payload);
+  assert.strictEqual(first.pdfUploadComplete, true);
+  assert.strictEqual(first.saveRequestId, payload.saveRequestId);
+  assert.strictEqual(first.savedPdfGroupKeys.original, 'session:original:1');
+  assert.strictEqual(repeated.replayed, true);
+  assert.strictEqual(repeated.rowIndex, first.rowIndex);
+  assert.strictEqual(test.files.length, 2);
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.acquired, lockCount + 1, 'Replay only needs its short claim lock');
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// Retry an interrupted multipart group from its next part; omit acknowledged groups.
+{
+  const test = fixture();
+  let fail = true;
+  test.onSave = function (name) {
+    if (name === 'gcn_part_002.pdf' && fail) { fail = false; throw new Error('network interrupted'); }
+  };
+  const payload = retryPayload({ pdfGCNBase64: '', pdfGCNFiles: parts('gcn') });
+  const partial = test.server.saveScanRecord(payload);
+  assert.strictEqual(partial.pdfUploadComplete, false);
+  assert.strictEqual(partial.savedPdfGroupKeys.original, 'session:original:1');
+  assert.strictEqual(partial.savedPdfGroupKeys.gcn, undefined);
+  assert.strictEqual(test.files.length, 3);
+  const result = test.server.saveScanRecord(Object.assign({}, payload, {
+    rowIndex: partial.rowIndex, pdfOriginalBase64: ''
+  }));
+  assert.strictEqual(result.pdfUploadComplete, true);
+  assert.strictEqual(result.rowIndex, partial.rowIndex);
+  assert.strictEqual(result.originalBackupSaved, true);
+  assert.strictEqual(result.pdfPartCounts.original, 1);
+  assert.strictEqual(result.pdfPartCounts.gcn, 2);
+  assert.strictEqual(test.files.length, 4);
+  assert.strictEqual(test.files.filter(function (file) { return file.name === 'gcn_part_001.pdf'; }).length, 1);
+  assert.strictEqual(test.childFolders.length, 1, 'Retries reuse only their own part folder');
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// Retry after an upload succeeded but its caller did not receive the partial response.
+{
+  const test = fixture();
+  let fail = true;
+  test.onSave = function (name) {
+    if (name === 'retry.pdf' && fail) { fail = false; throw new Error('temporary Drive failure'); }
+  };
+  const payload = retryPayload();
+  const partial = test.server.saveScanRecord(payload);
+  assert.strictEqual(partial.pdfUploadComplete, false);
+  const completed = test.server.saveScanRecord(payload);
+  assert.strictEqual(completed.pdfUploadComplete, true);
+  assert.strictEqual(test.files.filter(function (file) { return file.name === 'retry-original.pdf'; }).length, 1);
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(completed.rowIndex, partial.rowIndex);
+}
+
+// Retrying an old partial save cannot revert links another user has since updated.
+{
+  const test = fixture();
+  let fail = true;
+  test.onSave = function (name) {
+    if (name === 'retry-card.pdf' && fail) { fail = false; throw new Error('card unavailable'); }
+  };
+  const payload = retryPayload({ pdfGroupKeys: { original: 'session:original:1', gcn: 'session:gcn:1', cccd: 'session:cccd:1' },
+    fileNameCCCD: 'retry-card.pdf', pdfCCCDBase64: 'CC==' });
+  const partial = test.server.saveScanRecord(payload);
+  assert.strictEqual(partial.pdfUploadComplete, false);
+  const other = test.server.saveScanRecord({ rowIndex: partial.rowIndex, fileName: 'newer-gcn.pdf',
+    fileNameOriginal: 'newer-original.pdf', pdfOriginalBase64: 'DD==', pdfGCNBase64: 'EE==' });
+  const recovered = test.server.saveScanRecord(Object.assign({}, payload, { pdfOriginalBase64: '', pdfGCNBase64: '' }));
+  assert.strictEqual(recovered.pdfUploadComplete, true);
+  assert.strictEqual(recovered.rowIndex, partial.rowIndex);
+  assert.strictEqual(recovered.fileGCN, other.fileGCN, 'A cached prior group must not revert a later user\'s PDF link');
+  assert.strictEqual(recovered.fileId, other.fileId);
+  assert.strictEqual(recovered.fileUrl, other.fileUrl);
+  assert.strictEqual(test.rows[recovered.rowIndex - 1][16], 'newer-original.pdf');
+  assert.strictEqual(test.rows.length, 2);
+}
+
+// The same request cannot run concurrently; a different user's request remains independent.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  let duplicate, other;
+  test.onSave = function () {
+    test.onSave = null;
+    duplicate = test.server.saveScanRecord(payload);
+    other = test.server.saveScanRecord(retryPayload({ saveRequestId: 'different_request_0123456789', hoTenCSD: 'other owner' }));
+  };
+  const first = test.server.saveScanRecord(payload);
+  assert.strictEqual(duplicate.success, false);
+  assert.strictEqual(duplicate.code, 'SAVE_IN_PROGRESS');
+  assert.strictEqual(duplicate.retryAfterMs, 2500);
+  assert.notStrictEqual(first.rowIndex, other.rowIndex);
+  assert.strictEqual(test.rows.length, 3);
+  assert.strictEqual(test.files.length, 4);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// Metadata/group revisions need a new ID; missing old state cannot silently omit files.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  test.server.saveScanRecord(payload);
+  const changed = test.server.saveScanRecord(Object.assign({}, payload, { hoTenCSD: 'different owner' }));
+  assert.strictEqual(changed.code, 'SAVE_REQUEST_CHANGED');
+  const changedGroup = test.server.saveScanRecord(Object.assign({}, payload, {
+    pdfGroupKeys: { original: 'session:original:2', gcn: 'session:gcn:1' }
+  }));
+  assert.strictEqual(changedGroup.code, 'SAVE_REQUEST_CHANGED');
+  const missing = test.server.saveScanRecord(Object.assign({}, payload, {
+    saveRequestId: 'unknown_request_0123456789', pdfOriginalBase64: ''
+  }));
+  assert.strictEqual(missing.code, 'SAVE_RETRY_EXPIRED');
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.files.length, 2);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// A completed append whose response throws is reconciled from the saved row intent.
+{
+  const test = fixture(); test.failAppendAfterCommit = true;
+  const payload = retryPayload();
+  assert.throws(function () { test.server.saveScanRecord(payload); }, /append response lost/);
+  assert.strictEqual(test.rows.length, 2);
+  test.rows[1][19] = Number(test.rows[1][19]); // Sheets may return a numeric string as a number.
+  const recovered = test.server.saveScanRecord(payload);
+  assert.strictEqual(recovered.rowIndex, 2);
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.files.length, 2);
+  assert.strictEqual(test.held, false);
+}
+
+// A journal error after the append preserves its earlier row intent for recovery.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  test.onPropertyWrite = function (key, value) {
+    if (key.indexOf('SCAN_SAVE_V1_') !== 0 || !JSON.parse(value).rowCommitted) return;
+    test.onPropertyWrite = null;
+    throw new Error('journal unavailable after append');
+  };
+  assert.throws(function () { test.server.saveScanRecord(payload); }, /journal unavailable/);
+  assert.strictEqual(test.rows.length, 2);
+  const recovered = test.server.saveScanRecord(payload);
+  assert.strictEqual(recovered.rowIndex, 2);
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.files.length, 2);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// A failed append may leave a row intent that another user later occupies. Never overwrite it.
+{
+  const test = fixture(); test.failWrite = true;
+  const payload = retryPayload();
+  assert.throws(function () { test.server.saveScanRecord(payload); }, /sheet write failed/);
+  test.server.saveScanRecord({ hoTenCSD: 'other owner' });
+  const recovered = test.server.saveScanRecord(payload);
+  assert.strictEqual(recovered.rowIndex, 3);
+  assert.strictEqual(test.rows[1][4], 'other owner');
+  assert.strictEqual(test.rows[2][4], 'retry owner');
+  assert.strictEqual(test.files.length, 2);
+}
+
+// Flush errors cannot publish a completed replay before the sheet transaction succeeds.
+{
+  const test = fixture(); test.failFlush = true;
+  const payload = retryPayload();
+  assert.throws(function () { test.server.saveScanRecord(payload); }, /flush failed/);
+  const state = JSON.parse(test.properties['SCAN_SAVE_V1_' + payload.saveRequestId]);
+  assert.strictEqual(state.result, undefined);
+  assert.strictEqual(state.leaseUntil, 0);
+  const recovered = test.server.saveScanRecord(payload);
+  assert.strictEqual(recovered.pdfUploadComplete, true);
+  assert.strictEqual(recovered.replayed, undefined);
+  assert.strictEqual(recovered.rowIndex, 2);
+  assert.strictEqual(test.rows.length, 2);
+  assert.strictEqual(test.files.length, 2);
+}
+
+// Folder cache tolerates stale IDs/permissions and retains the name-search fallback.
+{
+  const test = fixture();
+  const first = test.server.ensureFolder();
+  assert.strictEqual(test.nameLookups, 1);
+  assert.strictEqual(test.server.ensureFolder(), first);
+  assert.strictEqual(test.nameLookups, 1);
+  assert.strictEqual(test.idLookups, 1);
+  test.cache.SCAN_ROOT_FOLDER_V1 = 'deleted-folder';
+  assert.strictEqual(test.server.ensureFolder(), first);
+  assert.strictEqual(test.nameLookups, 2);
+  assert.strictEqual(test.cache.SCAN_ROOT_FOLDER_V1, 'root-folder');
+}
+
+// Keep the journal bounded; active leases are not evicted by unrelated saves.
+{
+  const test = fixture();
+  for (let index = 0; index < 70; index++) {
+    const result = test.server.saveScanRecord({ saveRequestId: ('bounded_request_' + String(index).padStart(8, '0')).padEnd(100, '_'),
+      hoTenCSD: 'owner ' + index });
+    assert.strictEqual(result.success, true);
+  }
+  const retained = JSON.parse(test.properties.SCAN_SAVE_INDEX_V1);
+  assert.strictEqual(retained.length, 64);
+  assert.strictEqual(Object.keys(test.properties).filter(function (key) { return key.indexOf('SCAN_SAVE_V1_') === 0; }).length, 64);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+{
+  const test = fixture();
+  const ping = JSON.parse(test.server.doPost({ postData: { contents: JSON.stringify({ action: 'PING' }) } }).getContent());
+  assert.strictEqual(ping.supportsSaveRetry, true);
+  assert.strictEqual(ping.supportsSaveStatus, true);
+  assert.strictEqual(ping.saveRequestVersion, 1);
+  ['bad id', 'short', 'id_with_disallowed_!'].forEach(function (id) {
+    assert.throws(function () { test.server.saveScanRecord(retryPayload({ saveRequestId: id })); }, /Mã lượt lưu/);
+  });
+  assert.strictEqual(test.files.length, 0);
+  assert.strictEqual(test.rows.length, 1);
+}
+
+// Status checks are read-only and reveal completed groups during a running save.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  let during;
+  test.onSave = function (name) {
+    if (name !== 'retry.pdf') return;
+    const acquisitions = test.acquired;
+    const snapshot = JSON.stringify(test.properties);
+    during = JSON.parse(test.server.doPost({ postData: { contents: JSON.stringify({
+      action: 'SAVE_STATUS', payload: { saveRequestId: payload.saveRequestId }
+    }) } }).getContent());
+    assert.strictEqual(test.acquired, acquisitions);
+    assert.strictEqual(JSON.stringify(test.properties), snapshot);
+  };
+  const complete = test.server.saveScanRecord(payload);
+  assert.strictEqual(during.processing, true);
+  assert.strictEqual(during.rowIndex, 0);
+  assert.strictEqual(during.pdfUploadComplete, false);
+  assert.strictEqual(during.savedPdfGroupKeys.original, 'session:original:1');
+  assert.strictEqual(during.savedPdfGroupKeys.gcn, undefined);
+  const status = test.server.getSaveRequestStatus({ saveRequestId: payload.saveRequestId });
+  assert.strictEqual(status.processing, false);
+  assert.strictEqual(status.replayed, true);
+  assert.strictEqual(status.rowIndex, complete.rowIndex);
+  assert.strictEqual(status.fileGCN, complete.fileGCN);
+  assert.strictEqual(status.pdfUploadComplete, true);
+  const locks = test.acquired;
+  test.now += 25 * 60 * 60 * 1000;
+  assert.strictEqual(test.server.getSaveRequestStatus({ saveRequestId: payload.saveRequestId }).code, 'SAVE_RETRY_EXPIRED');
+  assert.strictEqual(test.acquired, locks);
+}
+
+// A partial response lost on the network can be recovered using only its small ID.
+{
+  const test = fixture();
+  const payload = retryPayload();
+  test.onSave = function (name) { if (name === 'retry.pdf') throw new Error('Drive unavailable'); };
+  const partial = test.server.saveScanRecord(payload);
+  const status = test.server.getSaveRequestStatus({ saveRequestId: payload.saveRequestId });
+  assert.strictEqual(status.processing, false);
+  assert.strictEqual(status.rowIndex, partial.rowIndex);
+  assert.strictEqual(status.savedPdfGroupKeys.original, 'session:original:1');
+  assert.strictEqual(status.incompletePdfGroups[0], 'gcn');
+  assert.strictEqual(status.originalBackupSaved, true);
+}
+
+{
+  const test = fixture({ sheetMissing: true, folderMissing: true });
+  const status = test.server.getSaveRequestStatus({ saveRequestId: 'unknown_request_0123456789' });
+  assert.strictEqual(status.code, 'SAVE_RETRY_EXPIRED');
+  assert.strictEqual(test.acquired, 0);
+  assert.strictEqual(test.sheetExists, false);
+  assert.strictEqual(test.folders.length, 0);
+  assert.strictEqual(Object.keys(test.properties).length, 0);
+}
+
+// Even at journal capacity no unfinished user's lease may be evicted.
+{
+  const test = fixture();
+  for (let index = 0; index < 64; index++) {
+    const claim = test.server.beginSaveRequest({ saveRequestId: ('active_request_' + index).padEnd(100, '_') },
+      { original: [], gcn: [], cccd: [] }, '2026-10-17T10:00:00Z');
+    assert(claim.state);
+  }
+  const snapshot = JSON.stringify(test.properties);
+  const extra = test.server.beginSaveRequest({ saveRequestId: 'one_more_request_0123456789' },
+    { original: [], gcn: [], cccd: [] }, '2026-10-17T10:00:00Z');
+  assert.strictEqual(extra.reply.code, 'SAVE_BUSY');
+  assert.strictEqual(JSON.stringify(test.properties), snapshot);
+  assert(Buffer.byteLength(test.properties.SCAN_SAVE_INDEX_V1, 'utf8') < 9000);
+}
+console.log('PASS: idempotent save replay, resumable parts/groups, exclusive per-request leases, row/flush recovery and cached folder lookup');
