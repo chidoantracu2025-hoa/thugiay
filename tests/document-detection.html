@@ -16,6 +16,7 @@
   <script src="../assets/a4-document-detector.js"></script>
   <script src="../assets/scan-session.js"></script>
   <script src="../assets/vendor/jspdf.umd.min.js"></script>
+  <script src="../assets/pdf-export.js"></script>
 </head>
 <body>
   <h1>Document detection browser regression</h1>
@@ -199,35 +200,56 @@
       ctx.putImageData(color, 3536, 2440);
       return canvas;
     }
-    async function verifyLosslessPng(canvas) {
+    async function verifyHighQualityJpeg(canvas) {
       const image = pdf.preparePdfImage(canvas, 420, 297);
-      assert(image.data.startsWith('data:image/png;base64,'), 'PDF source was not encoded as PNG');
+      assert(image.data.startsWith('data:image/jpeg;base64,'), 'PDF image was not encoded as JPEG');
       const blob = await (await fetch(image.data)).blob();
       const bitmap = await createImageBitmap(blob);
       try {
         assert(bitmap.width === canvas.width && bitmap.height === canvas.height,
-          `PNG dimensions ${bitmap.width}×${bitmap.height} differ from the native ${canvas.width}×${canvas.height}`);
+          `JPEG dimensions ${bitmap.width}×${bitmap.height} differ from the source below the DPI ceiling`);
         const source = canvas.getContext('2d', { willReadFrequently: true });
-        const patches = [[28, 30, 440, 18], [1750, 1250, 64, 16], [3536, 2440, 32, 32]];
+        const patches = [[28, 30, 440, 18], [28, 67, 440, 18], [28, 104, 440, 18]];
+        let totalError = 0, channels = 0, darkPixels = 0, retainedDarkPixels = 0;
         for (const [x, y, width, height] of patches) {
           const patch = createCanvas(width, height), ctx = patch.getContext('2d', { willReadFrequently: true });
           ctx.drawImage(bitmap, x, y, width, height, 0, 0, width, height);
           const expected = source.getImageData(x, y, width, height).data;
           const actual = ctx.getImageData(0, 0, width, height).data;
-          for (let i = 0; i < expected.length; i++) {
-            assert(actual[i] === expected[i], `PNG changed a fine-detail pixel at patch ${x},${y}, channel ${i}`);
+          for (let i = 0; i < expected.length; i += 4) {
+            for (let c = 0; c < 3; c++) { totalError += Math.abs(actual[i + c] - expected[i + c]); channels++; }
+            if (expected[i] + expected[i + 1] + expected[i + 2] < 360) {
+              darkPixels++;
+              if (actual[i] + actual[i + 1] + actual[i + 2] < 480) retainedDarkPixels++;
+            }
           }
         }
-        return `${bitmap.width}×${bitmap.height}; fine text and one-pixel color detail are exact`;
+        const meanError = totalError / channels, retention = retainedDarkPixels / darkPixels;
+        assert(darkPixels > 100, 'Fine-text fixture contains too few ink pixels');
+        assert(meanError < 3 && retention > .98, `Fine text degraded: mean channel error ${meanError}, dark stroke retention ${retention}`);
+        return `${bitmap.width}×${bitmap.height}; text mean error ${meanError.toFixed(2)}/255, dark strokes ${(retention * 100).toFixed(1)}% retained`;
       } finally { bitmap.close(); }
     }
-    async function verifyNativePdf(canvas) {
+    async function verify400Dpi(canvas) {
+      const before = [canvas.width, canvas.height];
+      const image = pdf.preparePdfImage(canvas, 100, 100);
+      const bitmap = await createImageBitmap(await (await fetch(image.data)).blob());
+      try {
+        assert(bitmap.width <= image.widthMm / 25.4 * 400 + 1e-8 && bitmap.height <= image.heightMm / 25.4 * 400 + 1e-8,
+          'Exported image exceeds 400 dpi at its actual placed size');
+        assert(bitmap.width < canvas.width && bitmap.height < canvas.height, 'High-DPI image was not downsampled');
+        assert(canvas.width === before[0] && canvas.height === before[1], 'Export changed the source canvas');
+        return `${bitmap.width}×${bitmap.height}; source ${before.join('×')} unchanged`;
+      } finally { bitmap.close(); }
+    }
+    async function verifyCompressedPdf(canvas) {
       const data = await pdf.createLocalPdf([{ type: 'document', canvas }]);
       const binary = atob(data.slice(data.indexOf(',') + 1));
       assert(/\/Subtype\s*\/Image\b/.test(binary), 'PDF has no embedded image');
       assert(/\/Width\s+3600\b/.test(binary) && /\/Height\s+2500\b/.test(binary), 'PDF image dimensions were reduced below the native 3600×2500');
-      assert(!/\/DCTDecode\b/.test(binary), 'PDF replaced the lossless image with JPEG compression');
-      return 'PDF embeds a 3600×2500 image without JPEG compression';
+      assert(/\/DCTDecode\b/.test(binary), 'PDF has no JPEG compression');
+      assert(binary.length <= window.DocumentPdfExporter.MAX_PDF_BYTES, 'Final PDF exceeds 10 MB');
+      return `PDF embeds a 3600×2500 JPEG; ${binary.length} bytes, within 10 MB`;
     }
     async function compareConcurrentSessions(canvas) {
       assert(window.ScanSession && typeof window.ScanSession.createWorkerClient === 'function', 'ScanSession script is missing');
@@ -301,7 +323,7 @@
       scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, detectDocumentWithOpenCv, prepareScan };')(state, document, window);
       const pdfEnd = html.indexOf('    function buildPdfFileName(', end);
       assert(pdfEnd > end, 'Cannot extract the production PDF functions');
-      pdf = new Function('window', 'yieldToInterface', html.slice(end, pdfEnd) + '\nreturn { preparePdfImage, createLocalPdf };')(window, () => Promise.resolve());
+      pdf = new Function('window', 'state', html.slice(end, pdfEnd) + '\nreturn { preparePdfImage, createLocalPdf };')(window, { saving: false });
       document.getElementById('status').textContent = 'Running generated-image and worker checks…';
       const options = { documentType: 'document', preferSpread: true, targetLongEdge: 800 };
 
@@ -370,9 +392,10 @@
       await check('Concurrent worker sessions keep request settings and results isolated', () => compareConcurrentSessions(wrinkled));
 
       const nativeFixture = nativeDetailFixture();
-      displayFixture('Native fine-text and one-pixel color detail', nativeFixture);
-      await check('Native PNG preserves fine text and one-pixel color detail', () => verifyLosslessPng(nativeFixture));
-      await check('PDF embeds the full native image dimensions', () => verifyNativePdf(nativeFixture));
+      displayFixture('Fine-text quality fixture', nativeFixture);
+      await check('High-quality JPEG retains fine text below the DPI ceiling', () => verifyHighQualityJpeg(nativeFixture));
+      await check('PDF image export respects 400 dpi without modifying the source', () => verify400Dpi(nativeFixture));
+      await check('Compressed PDF preserves below-ceiling dimensions and stays within 10 MB', () => verifyCompressedPdf(nativeFixture));
 
       const sample = new URLSearchParams(location.search).get('sample');
       if (sample) {
