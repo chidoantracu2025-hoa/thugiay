@@ -1,5 +1,6 @@
 const SHEET_NAME = 'Du_Lieu';
 const DRIVE_FOLDER_NAME = 'Ho_So_Dat_Dai';
+const MAX_PDF_BYTES = 10000000;
 
 const HEADER_ROW = [
   'STT', 'Tên huyện', 'Tên xã cũ', 'Tên xã mới', 'Họ Tên CSD',
@@ -10,12 +11,12 @@ const HEADER_ROW = [
 ];
 
 function doGet() {
-  return jsonResponse({
+  return jsonResponse(Object.assign({
     success: true,
     message: 'Google Apps Script API đang hoạt động mượt mà.',
     sheet: SHEET_NAME,
     folder: DRIVE_FOLDER_NAME
-  });
+  }, pdfUploadCapabilities()));
 }
 
 function doPost(e) {
@@ -27,7 +28,7 @@ function doPost(e) {
 
     switch (action) {
       case 'PING':
-        return jsonResponse({ success: true, message: 'API OK' });
+        return jsonResponse(Object.assign({ success: true, message: 'API OK' }, pdfUploadCapabilities()));
       case 'SEARCH':
         return jsonResponse(searchRecords(payload));
       case 'SAVE_SCAN':
@@ -50,6 +51,10 @@ function doPost(e) {
 
 function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function pdfUploadCapabilities() {
+  return { pdfUploadVersion: 2, supportsPdfParts: true, maxPdfBytes: MAX_PDF_BYTES };
 }
 
 function withScriptLock(callback, flushSpreadsheet) {
@@ -313,7 +318,6 @@ function updateRecordNotes(payload) {
 }
 
 function saveScanRecord(payload) {
-  const sheet = ensureSheet();
   const fileName = normalizeValue(payload && payload.fileName ? payload.fileName : `Ho_So_Dat_Dai_${Date.now()}.pdf`);
   const rowIndex = Number(payload && payload.rowIndex ? payload.rowIndex : 0);
   const pdfOriginalBase64 = normalizeValue(payload && payload.pdfOriginalBase64);
@@ -323,11 +327,19 @@ function saveScanRecord(payload) {
 
   const pdfGCNBase64 = normalizeValue(payload && (payload.pdfGCNBase64 || payload.pdfBase64));
   const pdfCCCDBase64 = normalizeValue(payload && payload.pdfCCCDBase64);
+  const baseName = fileName.replace(/\.pdf$/i, '');
+  const cccdFileName = normalizeValue(payload && payload.fileNameCCCD) || `${baseName.replace(/_GCN_\d+$/i, '')}_CCCD_${Date.now()}.pdf`;
+  // Validate the entire request before creating folders, uploading any PDF or writing rows.
+  const originalFiles = normalizePdfUploadGroup(payload && payload.pdfOriginalFiles, pdfOriginalBase64, originalFileName, 'bản gốc');
+  const gcnFiles = normalizePdfUploadGroup(payload && payload.pdfGCNFiles, pdfGCNBase64, fileName, 'GCN');
+  const cccdFiles = normalizePdfUploadGroup(payload && payload.pdfCCCDFiles, pdfCCCDBase64, cccdFileName, 'CCCD');
+  const sheet = ensureSheet();
   const driveWarnings = [];
   const uploaded = {};
+  const incompletePdfGroups = [];
   let folder = null;
 
-  if (pdfOriginalBase64 || pdfGCNBase64 || pdfCCCDBase64) {
+  if (originalFiles.length || gcnFiles.length || cccdFiles.length) {
     try { 
       folder = ensureFolder(); 
     } catch (e) { 
@@ -335,37 +347,21 @@ function saveScanRecord(payload) {
     }
   }
 
-  const baseName = fileName.replace(/\.pdf$/i, '');
-  const cccdFileName = normalizeValue(payload && payload.fileNameCCCD) || `${baseName.replace(/_GCN_\d+$/i, '')}_CCCD_${Date.now()}.pdf`;
-
   // File uploads are independent for each request and must not hold the sheet lock.
-  if (pdfOriginalBase64 && folder) {
+  for (const group of [
+    { key: 'original', label: 'bản gốc', files: originalFiles, fileName: originalFileName },
+    { key: 'gcn', label: 'GCN', files: gcnFiles, fileName: fileName },
+    { key: 'cccd', label: 'CCCD', files: cccdFiles, fileName: cccdFileName }
+  ]) {
+    if (!group.files.length) continue;
+    if (!folder) { incompletePdfGroups.push(group.key); continue; }
     try {
-      const saved = savePdfToDrive(folder, pdfOriginalBase64, originalFileName);
+      const saved = savePdfUploadGroup(folder, group.files, group.fileName);
       if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      uploaded.original = saved;
+      uploaded[group.key] = saved;
     } catch (error) {
-      driveWarnings.push('Không lưu được PDF bản gốc lên Drive: ' + error.toString());
-    }
-  }
-
-  if (pdfGCNBase64 && folder) {
-    try {
-      const saved = savePdfToDrive(folder, pdfGCNBase64, fileName);
-      if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      uploaded.gcn = saved;
-    } catch (error) {
-      driveWarnings.push('Không lưu được PDF GCN lên Drive: ' + error.toString());
-    }
-  }
-
-  if (pdfCCCDBase64 && folder) {
-    try {
-      const saved = savePdfToDrive(folder, pdfCCCDBase64, cccdFileName);
-      if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      uploaded.cccd = saved;
-    } catch (error) {
-      driveWarnings.push('Không lưu được PDF CCCD lên Drive: ' + error.toString());
+      incompletePdfGroups.push(group.key);
+      driveWarnings.push('Chưa lưu đầy đủ PDF ' + group.label + ' lên Drive: ' + error.toString());
     }
   }
 
@@ -380,7 +376,7 @@ function saveScanRecord(payload) {
     if (uploaded.original) {
       fileId = uploaded.original.fileId;
       fileUrl = uploaded.original.fileUrl;
-    } else if (!pdfOriginalBase64) {
+    } else if (!originalFiles.length) {
       for (const saved of [uploaded.gcn, uploaded.cccd]) {
         if (!saved) continue;
         if (!fileId) fileId = saved.fileId || '';
@@ -414,7 +410,9 @@ function saveScanRecord(payload) {
     else sheet.appendRow(row);
     return {
       success: true,
-      message: isUpdate ? 'Đã cập nhật hồ sơ.' : 'Đã lưu hồ sơ mới.',
+      message: incompletePdfGroups.length
+        ? 'Đã lưu thông tin hồ sơ; một số nhóm PDF chưa được lưu đầy đủ.'
+        : (isUpdate ? 'Đã cập nhật hồ sơ.' : 'Đã lưu hồ sơ mới.'),
       warning: driveWarnings.length > 0 ? driveWarnings.join('\n') : undefined,
       fileUrl: fileUrl,
       fileId: fileId,
@@ -423,15 +421,77 @@ function saveScanRecord(payload) {
       soCCCD: soCCCD,
       updated: isUpdate,
       originalBackupSaved: Boolean(uploaded.original),
+      pdfUploadComplete: incompletePdfGroups.length === 0,
+      incompletePdfGroups: incompletePdfGroups,
+      pdfPartCounts: {
+        original: uploaded.original ? originalFiles.length : 0,
+        gcn: uploaded.gcn ? gcnFiles.length : 0,
+        cccd: uploaded.cccd ? cccdFiles.length : 0
+      },
       rowIndex: savedRowIndex
     };
   }, true);
 }
 
+function normalizePdfUploadGroup(parts, legacyBase64, legacyFileName, label) {
+  let files = [];
+  if (parts != null) {
+    if (!Array.isArray(parts)) throw new Error('Danh sách PDF ' + label + ' không hợp lệ.');
+    if (parts.length) {
+      if (parts.length < 2 || legacyBase64) throw new Error('Nhóm PDF ' + label + ' phải có ít nhất hai phần và không gửi kèm PDF đơn.');
+      files = parts;
+    }
+  }
+  if (!files.length && legacyBase64) files = [{ base64: legacyBase64, fileName: legacyFileName }];
+  return files.map(function (file, index) {
+    if (!file || typeof file.base64 !== 'string' || !normalizeValue(file.fileName)) {
+      throw new Error('Thiếu dữ liệu hoặc tên phần PDF ' + label + ' số ' + (index + 1) + '.');
+    }
+    const clean = file.base64.replace(/^data:[^,]*;base64,/i, '').replace(/\s/g, '');
+    const padded = clean.indexOf('=') >= 0;
+    if (!clean || !/^[A-Za-z0-9+/]*={0,2}$/.test(clean) || clean.length % 4 === 1 || (padded && clean.length % 4 !== 0)) {
+      throw new Error('Dữ liệu Base64 của PDF ' + label + ' số ' + (index + 1) + ' không hợp lệ.');
+    }
+    const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+    const byteLength = Math.floor(clean.length * 3 / 4) - padding;
+    if (byteLength > MAX_PDF_BYTES) {
+      throw new Error('PDF ' + label + ' số ' + (index + 1) + ' vượt 10 MB (' + byteLength + ' byte). Hãy chia thành các PDF nhỏ hơn.');
+    }
+    return { base64: clean, fileName: normalizeValue(file.fileName), byteLength: byteLength };
+  });
+}
+
+function savePdfUploadGroup(parent, files, fileName) {
+  const multipart = files.length > 1;
+  // Always create a fresh folder: simultaneous requests must never mix their parts.
+  const folder = multipart ? parent.createFolder(fileName.replace(/\.pdf$/i, '') + '_CAC_PHAN_' + Date.now()) : parent;
+  const warnings = [];
+  if (multipart) {
+    try { folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); }
+    catch (error) { warnings.push('Không thể chia sẻ công khai thư mục các phần PDF: ' + error.toString()); }
+  }
+  let saved = null;
+  for (let index = 0; index < files.length; index++) {
+    try {
+      saved = savePdfToDrive(folder, files[index].base64, files[index].fileName);
+      if (saved.sharingWarning) warnings.push(saved.sharingWarning);
+    } catch (error) {
+      throw new Error('Đã lưu ' + index + '/' + files.length + ' phần; lỗi ở ' + files[index].fileName + ': ' + error.toString());
+    }
+  }
+  return {
+    fileId: multipart ? folder.getId() : saved.fileId,
+    fileUrl: multipart ? folder.getUrl() : saved.fileUrl,
+    sharingWarning: warnings.length ? warnings.join('\n') : undefined
+  };
+}
+
 function savePdfToDrive(folder, pdfBase64, fileName) {
   const clean = String(pdfBase64 || '').replace(/^data:.*;base64,/, '').trim();
   if (!clean) throw new Error('PDF Base64 rỗng');
-  const blob = Utilities.newBlob(Utilities.base64Decode(clean), 'application/pdf', fileName);
+  const bytes = Utilities.base64Decode(clean);
+  if (bytes.length > MAX_PDF_BYTES) throw new Error('PDF vượt giới hạn 10 MB.');
+  const blob = Utilities.newBlob(bytes, 'application/pdf', fileName);
   const file = folder.createFile(blob);
   let sharingWarning = '';
 

@@ -12,10 +12,30 @@ function fixture(options) {
     sheetExists: !options.sheetMissing,
     folders: options.folderMissing ? [] : [{}],
     held: false, acquired: 0, released: 0, flushed: 0,
-    insertedSheets: 0, createdFolders: 0, files: [],
+    insertedSheets: 0, createdFolders: 0, childFolders: [], files: [],
     beforeAcquire: null, onSave: null, onRelease: null,
-    failWrite: false, failFlush: false, failWait: false
+    failWrite: false, failFlush: false, failWait: false, failFolderSharing: false
   };
+  function rootFolder(folder) {
+    folder.createFolder = function (name) {
+      assert(!test.held, 'PDF group folder creation must not hold the sheet lock');
+      const id = 'folder-' + (test.childFolders.length + 1);
+      const child = {
+        name: name, shared: false,
+        getId: function () { return id; },
+        getUrl: function () { return 'local-' + id; },
+        setSharing: function () {
+          assert(!test.held);
+          if (test.failFolderSharing) throw new Error('folder sharing unavailable');
+          child.shared = true;
+        }
+      };
+      test.childFolders.push(child);
+      return child;
+    };
+    return folder;
+  }
+  test.folders.forEach(rootFolder);
   function write() {
     assert(test.held, 'Every sheet mutation must hold the script lock');
     if (test.failWrite) { test.failWrite = false; throw new Error('sheet write failed'); }
@@ -55,6 +75,12 @@ function fixture(options) {
     }
   };
   const context = vm.createContext({
+    ContentService: {
+      MimeType: { JSON: 'json' },
+      createTextOutput: function (text) {
+        return { setMimeType: function () { return this; }, getContent: function () { return text; } };
+      }
+    },
     SpreadsheetApp: {
       getActiveSpreadsheet: function () { return spreadsheet; },
       flush: function () {
@@ -86,6 +112,7 @@ function fixture(options) {
       }
     },
     DriveApp: {
+      Access: { ANYONE_WITH_LINK: 'anyone' }, Permission: { VIEW: 'view' },
       getFoldersByName: function () {
         const folders = test.folders.slice();
         return { hasNext: function () { return folders.length > 0; }, next: function () { return folders.shift(); } };
@@ -93,7 +120,7 @@ function fixture(options) {
       createFolder: function () {
         assert(test.held, 'Folder creation must hold the script lock');
         assert.strictEqual(test.folders.length, 0, 'Folder was created twice');
-        const folder = {}; test.folders.push(folder); test.createdFolders++; return folder;
+        const folder = rootFolder({}); test.folders.push(folder); test.createdFolders++; return folder;
       }
     }
   });
@@ -101,7 +128,7 @@ function fixture(options) {
   context.savePdfToDrive = function (folder, data, name) {
     assert(!test.held, 'Slow PDF uploads must not hold the shared script lock');
     const saved = { fileId: 'file-' + (test.files.length + 1), fileUrl: 'local-file-' + (test.files.length + 1) };
-    test.files.push({ name: name, data: data, saved: saved });
+    test.files.push({ name: name, data: data, saved: saved, folder: folder });
     if (test.onSave) test.onSave(name, saved);
     return saved;
   };
@@ -239,4 +266,160 @@ function record() {
   assert.strictEqual(test.flushed, 0);
   assert.strictEqual(test.rows.length, 1);
 }
-console.log('PASS: concurrent save row/STT ownership, latest fields, unlocked uploads, initialization and lock cleanup');
+function parts(prefix) {
+  return [
+    { fileName: prefix + '_part_001.pdf', base64: 'data:application/pdf;base64,AA==' },
+    { fileName: prefix + '_part_002.pdf', base64: 'BB==' }
+  ];
+}
+
+// Old single-file clients keep file URLs/names; empty part arrays are harmless.
+{
+  const test = fixture();
+  const result = test.server.saveScanRecord({ fileName: 'legacy.pdf', pdfGCNBase64: 'AA==', pdfGCNFiles: [] });
+  assert.strictEqual(result.fileGCN, 'local-file-1');
+  assert.strictEqual(test.files[0].name, 'legacy.pdf');
+  assert.strictEqual(test.childFolders.length, 0);
+  assert.strictEqual(result.pdfUploadComplete, true);
+  assert.strictEqual(result.pdfPartCounts.gcn, 1);
+}
+
+// Every group retains part order and returns only its own complete, shareable folder.
+{
+  const test = fixture();
+  const result = test.server.saveScanRecord({ fileName: 'main.pdf', fileNameOriginal: 'backup.pdf',
+    pdfOriginalFiles: parts('original'), pdfGCNFiles: parts('gcn'), pdfCCCDFiles: parts('cccd') });
+  assert.strictEqual(test.childFolders.length, 3);
+  assert.deepStrictEqual(test.files.map(function (file) { return file.name; }), [
+    'original_part_001.pdf', 'original_part_002.pdf', 'gcn_part_001.pdf', 'gcn_part_002.pdf', 'cccd_part_001.pdf', 'cccd_part_002.pdf'
+  ]);
+  test.files.forEach(function (file, index) { assert.strictEqual(file.folder, test.childFolders[Math.floor(index / 2)]); });
+  assert(test.childFolders.every(function (folder) { return folder.shared; }));
+  assert.strictEqual(result.originalBackupSaved, true);
+  assert.strictEqual(result.fileId, 'folder-1');
+  assert.strictEqual(result.fileUrl, 'local-folder-1');
+  assert.strictEqual(result.fileGCN, 'local-folder-2');
+  assert.strictEqual(result.fileCCCD, 'local-folder-3');
+  assert.strictEqual(test.rows[1][13], 'local-folder-2');
+  assert.strictEqual(test.rows[1][14], 'local-folder-3');
+  assert.strictEqual(test.rows[1][16], 'backup.pdf');
+  assert.strictEqual(result.pdfUploadComplete, true);
+  assert.strictEqual(result.incompletePdfGroups.length, 0);
+  assert.strictEqual(result.pdfPartCounts.original, 2);
+  assert.strictEqual(result.pdfPartCounts.gcn, 2);
+  assert.strictEqual(result.pdfPartCounts.cccd, 2);
+}
+
+// Two users saving identical names during an upload never share a group folder.
+{
+  const test = fixture();
+  let second;
+  test.onSave = function () {
+    test.onSave = null;
+    second = test.server.saveScanRecord({ fileName: 'same.pdf', pdfGCNFiles: parts('same') });
+  };
+  const first = test.server.saveScanRecord({ fileName: 'same.pdf', pdfGCNFiles: parts('same') });
+  assert.strictEqual(test.childFolders.length, 2);
+  assert.notStrictEqual(first.fileGCN, second.fileGCN);
+  assert.strictEqual(first.fileGCN, 'local-folder-1');
+  assert.strictEqual(second.fileGCN, 'local-folder-2');
+  assert.strictEqual(first.rowIndex, 3);
+  assert.strictEqual(second.rowIndex, 2);
+  assert.strictEqual(test.files.filter(function (file) { return file.folder === test.childFolders[0]; }).length, 2);
+  assert.strictEqual(test.files.filter(function (file) { return file.folder === test.childFolders[1]; }).length, 2);
+  assert.strictEqual(test.acquired, test.released);
+}
+
+// A partial group is not published as complete and never replaces a prior valid link.
+{
+  const test = fixture({ rows: [new Array(24).fill('HEADER'), record()] });
+  test.onSave = function (name) { if (name === 'gcn_part_002.pdf') throw new Error('second part failed'); };
+  const result = test.server.saveScanRecord({ rowIndex: 2, pdfGCNFiles: parts('gcn'), pdfCCCDBase64: 'CC==' });
+  assert.strictEqual(result.pdfUploadComplete, false);
+  assert.strictEqual(result.incompletePdfGroups[0], 'gcn');
+  assert.strictEqual(result.fileGCN, 'old GCN');
+  assert.strictEqual(test.rows[1][13], 'old GCN');
+  assert.strictEqual(result.fileCCCD, 'local-file-3');
+  assert.strictEqual(result.pdfPartCounts.gcn, 0);
+  assert.strictEqual(result.pdfPartCounts.cccd, 1);
+  assert(result.warning.indexOf('1/2') >= 0);
+  assert(result.warning.indexOf('gcn_part_002.pdf') >= 0);
+  assert(result.message.indexOf('chưa được lưu đầy đủ') >= 0);
+}
+{
+  const test = fixture({ rows: [new Array(24).fill('HEADER'), record()] });
+  test.onSave = function (name) { if (name === 'original_part_002.pdf') throw new Error('backup part failed'); };
+  const result = test.server.saveScanRecord({ rowIndex: 2, pdfOriginalFiles: parts('original'), pdfGCNBase64: 'CC==' });
+  assert.strictEqual(result.originalBackupSaved, false);
+  assert.strictEqual(result.pdfUploadComplete, false);
+  assert.strictEqual(result.incompletePdfGroups[0], 'original');
+  assert.strictEqual(result.fileId, 'old file id');
+  assert.strictEqual(result.fileUrl, 'old file URL');
+  assert.strictEqual(result.pdfPartCounts.original, 0);
+}
+{
+  const test = fixture(); test.failFolderSharing = true;
+  const result = test.server.saveScanRecord({ pdfGCNFiles: parts('gcn') });
+  assert.strictEqual(result.pdfUploadComplete, true);
+  assert.strictEqual(result.fileGCN, 'local-folder-1');
+  assert(result.warning.indexOf('folder sharing unavailable') >= 0);
+}
+
+// Size is decoded PDF bytes, including correct base64 padding, not JSON/data URI length.
+{
+  const test = fixture();
+  const exact = Buffer.alloc(10000000, 1).toString('base64');
+  const files = test.server.normalizePdfUploadGroup(null, 'data:application/pdf;base64,' + exact, 'exact.pdf', 'GCN');
+  assert.strictEqual(files[0].byteLength, 10000000);
+  assert.strictEqual(test.server.normalizePdfUploadGroup(null, 'AAA=', 'two.pdf', 'GCN')[0].byteLength, 2);
+  assert.strictEqual(test.server.normalizePdfUploadGroup(null, 'AAAA', 'three.pdf', 'GCN')[0].byteLength, 3);
+  assert.strictEqual(test.server.normalizePdfUploadGroup(null, 'AA', 'unpadded.pdf', 'GCN')[0].byteLength, 1);
+}
+
+// Reject an oversized LATER group before saving an earlier valid group or creating anything.
+{
+  const test = fixture({ sheetMissing: true, folderMissing: true });
+  const oversized = Buffer.alloc(10000001, 1).toString('base64');
+  assert.throws(function () {
+    test.server.saveScanRecord({ pdfOriginalBase64: 'AA==', pdfGCNFiles: [
+      { fileName: 'small.pdf', base64: 'AA==' }, { fileName: 'large.pdf', base64: oversized }
+    ] });
+  }, /10 MB.*10000001/);
+  assert.strictEqual(test.sheetExists, false);
+  assert.strictEqual(test.folders.length, 0);
+  assert.strictEqual(test.files.length, 0);
+  assert.strictEqual(test.acquired, 0);
+  assert.throws(function () { test.server.saveScanRecord({ pdfGCNBase64: oversized }); }, /10 MB/);
+  assert.strictEqual(test.acquired, 0);
+}
+
+// Malformed later parts also cannot leave an earlier uploaded group behind.
+[
+  { pdfOriginalBase64: 'AA==', pdfCCCDFiles: [{ fileName: 'one.pdf', base64: 'AA==' }, { fileName: 'two.pdf', base64: 'not base64!' }] },
+  { pdfGCNFiles: [{ fileName: 'one.pdf', base64: 'AA==' }, { base64: 'AA==' }] },
+  { pdfGCNFiles: 'not an array' },
+  { pdfGCNFiles: [{ fileName: 'one.pdf', base64: 'AA==' }] },
+  { pdfGCNFiles: parts('gcn'), pdfGCNBase64: 'AA==' }
+].forEach(function (payload) {
+  const test = fixture({ sheetMissing: true, folderMissing: true });
+  assert.throws(function () { test.server.saveScanRecord(payload); });
+  assert.strictEqual(test.files.length, 0);
+  assert.strictEqual(test.sheetExists, false);
+  assert.strictEqual(test.acquired, 0);
+});
+
+// Clients can detect an outdated Apps Script before attempting a split upload.
+{
+  const test = fixture({ sheetMissing: true, folderMissing: true });
+  const get = JSON.parse(test.server.doGet().getContent());
+  const ping = JSON.parse(test.server.doPost({ postData: { contents: JSON.stringify({ action: 'PING', payload: {} }) } }).getContent());
+  [get, ping].forEach(function (reply) {
+    assert.strictEqual(reply.success, true);
+    assert.strictEqual(reply.pdfUploadVersion, 2);
+    assert.strictEqual(reply.supportsPdfParts, true);
+    assert.strictEqual(reply.maxPdfBytes, 10000000);
+  });
+  assert.strictEqual(test.sheetExists, false);
+  assert.strictEqual(test.acquired, 0);
+}
+console.log('PASS: concurrent row ownership, PDF part folders/order/isolation, 10 MB validation before writes, partial failures and lock cleanup');

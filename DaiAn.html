@@ -11,6 +11,7 @@
   <script src="./jscanify.min.js"></script>
   <script src="./assets/a4-document-detector.js"></script>
   <script src="./assets/scan-session.js"></script>
+  <script src="./assets/pdf-export.js"></script>
   <style>
     :root {
       --primary: #1d4ed8;
@@ -421,7 +422,7 @@
           </select>
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
           <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files)" />
-          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF giữ độ phân giải ảnh nguồn và dùng PNG không mất dữ liệu, không giới hạn dung lượng trong ứng dụng.</div>
+          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF nén chất lượng cao, tối đa 400 dpi và 10 MB mỗi file; hồ sơ lớn tự chia theo trang, lưu các phần trong cùng thư mục.</div>
         </div>
 
         <div class="mini-grid mt-8">
@@ -709,8 +710,8 @@
       try { return JSON.parse(text); } catch (e) { return null; }
     }
 
-    async function apiRequest(action, payload) {
-      const url = getApiUrl();
+    async function apiRequest(action, payload, requestUrl) {
+      const url = requestUrl === undefined ? getApiUrl() : requestUrl;
       if (!url) throw new Error('Vui lòng nhập Web App URL trước khi thao tác.');
 
       const response = await fetch(url, {
@@ -798,6 +799,7 @@
     }
 
     function fillFormFromResult(item) {
+      if (state.saving) { setStatus('Đang lưu hồ sơ, vui lòng chờ hoàn tất.', 'normal'); return; }
       identityGeneration++;
       const values = {
         tenHuyen: item['Tên huyện'] || item.tenHuyen || '',
@@ -2096,45 +2098,47 @@
     }
 
     function preparePdfImage(canvas, pageWidth, pageHeight) {
-      const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
-      // PNG preserves the source pixels; page placement never resamples the image.
-      const data = canvas.toDataURL('image/png');
-      if (!data || data === 'data:,') throw new Error('Không thể xuất ảnh đầy đủ độ phân giải trên thiết bị này.');
-      return { data, widthMm: canvas.width * ratio, heightMm: canvas.height * ratio };
+      return window.DocumentPdfExporter.prepareImage(canvas, pageWidth, pageHeight);
     }
 
     async function createLocalPdf(scans, original = false) {
-      if (!scans.length) throw new Error('Không có ảnh để tạo PDF.');
-      const { jsPDF } = window.jspdf;
-      let pdf;
-      for (const item of scans) {
-        await yieldToInterface();
-        const canvas = original ? item.originalCanvas : item.canvas;
-        if (!canvas) throw new Error('Thiếu ảnh gốc để tạo bản sao dự phòng.');
-        const isDocument = item.type === 'document';
-        const format = isDocument ? 'a3' : 'a4';
-        const orientation = isDocument && canvas.width > canvas.height ? 'landscape' : 'portrait';
-        if (!pdf) pdf = new jsPDF({ orientation, unit: 'mm', format, compress: true });
-        else pdf.addPage(format, orientation);
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        // Keep cards at their physical size instead of enlarging them to fill A4.
-        const image = isDocument
-          ? preparePdfImage(canvas, pageWidth, pageHeight)
-          : preparePdfImage(canvas, canvas.width >= canvas.height ? 85.6 : 53.98,
-              canvas.width >= canvas.height ? 53.98 : 85.6);
-        pdf.addImage(image.data, 'PNG', (pageWidth - image.widthMm) / 2,
-          (pageHeight - image.heightMm) / 2, image.widthMm, image.heightMm, undefined, 'FAST');
-      }
-      return pdf.output('datauristring');
+      const parts = await buildPdfParts(scans, original);
+      if (parts.length !== 1) throw new Error('Hồ sơ cần chia thành nhiều PDF dưới 10 MB. Hãy dùng chức năng lưu hồ sơ để lưu đủ các phần.');
+      return parts[0].dataUri;
+    }
+
+    async function buildPdfParts(scans, original = false) {
+      const label = original ? 'bản sao trước căn chỉnh' : 'GCN / CCCD';
+      return window.DocumentPdfExporter.exportPdfParts(scans, {
+        original,
+        onProgress: progress => {
+          if (state.saving && progress.stage === 'encode') {
+            setStatus(`Đang nén PDF ${label}: trang ${progress.pageIndex}/${progress.totalPages}, phần ${progress.partCount}...`, 'normal');
+          }
+        }
+      });
     }
 
     async function buildPdfFromScans(scans) {
-      return createLocalPdf(scans);
+      return buildPdfParts(scans);
     }
 
     async function buildOriginalBackupPdf(scans) {
-      return createLocalPdf(scans, true);
+      return buildPdfParts(scans, true);
+    }
+
+    function pdfUploadFields(parts, fileName, singleKey, partsKey) {
+      if (parts.some(part => !Number.isInteger(part.byteLength) || part.byteLength < 1 ||
+          part.byteLength > window.DocumentPdfExporter.MAX_PDF_BYTES)) {
+        throw new Error('Không thể lưu PDF vượt giới hạn 10 MB.');
+      }
+      if (parts.length < 2) return { [singleKey]: parts.length ? parts[0].dataUri : '' };
+      const baseName = fileName.replace(/\.pdf$/i, '');
+      const digits = String(parts.length).length;
+      return { [partsKey]: parts.map((part, index) => ({
+        base64: part.dataUri,
+        fileName: `${baseName}_phan_${String(index + 1).padStart(digits, '0')}_tren_${parts.length}.pdf`
+      })) };
     }
 
     function buildPdfFileName() {
@@ -2179,11 +2183,11 @@
       document.getElementById('btnSaveRecord').disabled = true;
       try {
         await identityQueue;
-        setStatus('Đang tạo PDF đầy đủ độ phân giải và bản sao gốc...', 'normal');
-        const allScans = [...state.documentPages, ...state.cccdPhotos];
-        const originalBackupFileName = buildOriginalBackupFileName();
-        const pdfOriginalBase64 = await buildOriginalBackupPdf(allScans);
-
+        const requestUrl = getApiUrl();
+        if (!requestUrl) throw new Error('Vui lòng nhập Web App URL trước khi thao tác.');
+        const documentPages = state.documentPages.slice();
+        const cccdPhotos = state.cccdPhotos.slice();
+        // Capture the record once; exporting several parts must not change its row or metadata.
         const payload = {
           tenHuyen: document.getElementById('tenHuyen').value.trim(),
           tenXaCu: document.getElementById('tenXaCu').value.trim(),
@@ -2202,28 +2206,50 @@
           soCCCD: document.getElementById('soCCCD').value.trim(),
           ocrText: document.getElementById('ocrText').value.trim(),
           rowIndex: state.selectedRowIndex,
-          pageCount: state.documentPages.length + state.cccdPhotos.length,
+          pageCount: documentPages.length + cccdPhotos.length,
           createdAt: new Date().toISOString(),
           fileName: buildPdfFileName(),
           fileNameCCCD: buildCccdPdfFileName(),
-          fileNameOriginal: originalBackupFileName,
-          pdfOriginalBase64,
-          pdfGCNBase64: state.documentPages.length
-            ? await buildPdfFromScans(state.documentPages)
-            : '',
-          pdfCCCDBase64: state.cccdPhotos.length ? await buildPdfFromScans(state.cccdPhotos) : ''
+          fileNameOriginal: buildOriginalBackupFileName()
         };
 
-        const result = await apiRequest('SAVE_SCAN', payload);
+        setStatus('Đang tạo PDF tối đa 400 dpi, 10 MB mỗi file...', 'normal');
+        // Prepare every group before uploading, so an export error never sends a partial record.
+        const originalParts = await buildOriginalBackupPdf([...documentPages, ...cccdPhotos]);
+        const gcnParts = documentPages.length ? await buildPdfFromScans(documentPages) : [];
+        const cccdParts = cccdPhotos.length ? await buildPdfFromScans(cccdPhotos) : [];
+        Object.assign(payload,
+          pdfUploadFields(originalParts, payload.fileNameOriginal, 'pdfOriginalBase64', 'pdfOriginalFiles'),
+          pdfUploadFields(gcnParts, payload.fileName, 'pdfGCNBase64', 'pdfGCNFiles'),
+          pdfUploadFields(cccdParts, payload.fileNameCCCD, 'pdfCCCDBase64', 'pdfCCCDFiles'));
+        const multipart = [originalParts, gcnParts, cccdParts].some(parts => parts.length > 1);
+        if (multipart) {
+          const capabilities = await apiRequest('PING', {}, requestUrl);
+          if (capabilities.supportsPdfParts !== true || capabilities.pdfUploadVersion < 2) {
+            throw new Error('Web App chưa hỗ trợ PDF chia phần. Vui lòng triển khai phiên bản code.gs mới rồi lưu lại; ảnh vẫn được giữ trên trang.');
+          }
+        }
+        setStatus('Đang lưu các PDF lên Google...', 'normal');
+        const result = await apiRequest('SAVE_SCAN', payload, requestUrl);
         if (result.soCCCD) document.getElementById('soCCCD').value = result.soCCCD;
-
-        if (result.fileGCN || result.fileCCCD || result.fileId) {
-          if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
-          if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
-          renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
-          alert(`${result.message || 'Lưu thành công.'}\nPDF GCN và CCCD (nếu có) đã lưu riêng trên cùng hồ sơ.${result.originalBackupSaved ? '\nĐã lưu bản sao trước căn chỉnh, giữ độ phân giải nguồn và không nén mất dữ liệu.' : ''}${result.warning ? `\n${result.warning}` : ''}`);
-        } else {
-          alert([result.message || 'Lưu thông tin lên Google Sheet thành công.', result.warning].filter(Boolean).join('\n'));
+        if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
+        if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
+        renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
+        const messages = [result.message || 'Lưu thành công.'];
+        if (result.pdfUploadComplete === false) {
+          state.selectedRowIndex = result.rowIndex || payload.rowIndex;
+          document.getElementById('btnSaveRecord').textContent = 'Lưu lại PDF cho dòng đã chọn';
+          messages.push('Một số PDF chưa lưu đầy đủ. Ảnh vẫn được giữ để lưu lại vào cùng hồ sơ.');
+        } else if (result.fileGCN || result.fileCCCD || result.fileId) {
+          messages.push('PDF tối đa 400 dpi và 10 MB mỗi file.');
+          if (multipart) messages.push('Các PDF chia phần được lưu theo thứ tự trong thư mục riêng cho từng loại.');
+          if (result.originalBackupSaved) messages.push('Đã lưu bản sao ảnh trước căn chỉnh với cùng mức nén chất lượng cao.');
+        }
+        if (result.warning) messages.push(result.warning);
+        alert(messages.join('\n'));
+        if (result.pdfUploadComplete === false) {
+          setStatus('Đã lưu thông tin; cần lưu lại PDF còn thiếu', 'error');
+          return;
         }
 
         state.selectedRowIndex = null;

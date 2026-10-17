@@ -29,18 +29,33 @@ for camera and Worker support; opening a file directly is not the supported setu
 - Dependencies are stored locally; no external recognition API is called.
   Existing Drive/Sheet saving still uploads the resulting PDF and record to Google.
 
-Scan output and PDF images retain the native source/crop resolution. PDF images
-use lossless PNG; jsPDF's FAST compression only changes PNG/deflate compression,
-not pixel quality. There is no application file-size cap, 200 dpi downsampling
-or repeated JPEG recompression. The combined backup uses images before geometric
-and lighting correction at their original pixel dimensions. A3 orientation follows
-the image; cards still fit inside 85.6 x 53.98 mm (swapped for portrait) on A4.
+Scan processing retains the native source/crop resolution. `pdf-export.js`
+exports JPEG images at quality 0.98, downsampling only when their placed size
+would exceed 400 dpi; it never enlarges smaller sources. Each final PDF is
+measured as binary data and capped at 10,000,000 bytes, including PDF overhead.
+Long documents split in page order rather than lowering the quality of all pages.
+Only a page that exceeds the cap on its own retries JPEG quality 0.96, 0.94 and
+0.92, always encoding from the same export canvas. If it still cannot fit, saving
+stops with a clear error and keeps the scans for retry. The combined backup uses
+images before geometric and lighting correction with the same export compression;
+it is not a byte-exact or lossless archive. A3 orientation follows the image;
+cards still fit inside 85.6 x 53.98 mm (swapped for portrait) on A4.
 Thumbnail previews remain smaller JPEGs and are never used to generate PDFs.
 Camera capture requests the maximum available still-photo dimensions and uses
 the native video frame if still capture is unavailable. Detection analysis and
-lighting estimation use small probes without resizing the final saved image.
+lighting estimation use small probes without resizing the recognition image.
 Readability still depends on source focus, lighting and resolution; device memory
 and Google service limits still apply to very large files.
+
+The browser prepares all PDF groups before making a save request. `code.gs`
+also validates every file's decoded size before any upload or sheet mutation.
+A single PDF uses the existing file link. Multiple parts of one kind use a fresh
+shared Drive folder, whose link goes into the same original/GCN/CCCD link field.
+Parts have numbered filenames, and simultaneous saves never reuse a folder.
+Deploy the updated Apps Script before saving split documents: the browser checks
+its multipart capability and stops if the deployed API is older. A partial Drive
+failure is reported explicitly and retains the previous link for the failed group;
+the page keeps the row selected so retry updates the same record.
 
 `code.gs` uploads files independently, then uses a short script lock to read the
 latest row, allocate its STT, write it, and return the exact saved row index.
@@ -60,7 +75,8 @@ https://github.com/naptha/tesseract.js
 https://github.com/naptha/tesseract.js-core
 English language data: https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz
 
-Validation from the repository root: `node tests/land-scan.test.js`,
+Validation from the repository root: `node tests/pdf-export.test.js`,
+`node tests/pdf-save.test.js`, `node tests/land-scan.test.js`,
 `node tests/scan-session.test.js` and `node tests/server-concurrency.test.js`.
 For image detection, serve the repository with `python3 -m http.server 8765`
 and open `http://localhost:8765/tests/document-detection.html`. The browser
