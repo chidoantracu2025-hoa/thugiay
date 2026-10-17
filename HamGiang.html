@@ -10,6 +10,7 @@
   <script src="./opencv.js"></script>
   <script src="./jscanify.min.js"></script>
   <script src="./assets/a4-document-detector.js"></script>
+  <script src="./assets/scan-session.js"></script>
   <style>
     :root {
       --primary: #1d4ed8;
@@ -397,7 +398,7 @@
             <option value="fallback">Dự phòng (jscanify / dò nền)</option>
             <option value="all">Thử tất cả và chọn kết quả phù hợp nhất</option>
           </select>
-          <div class="helper">Khi chụp, “Tất cả” so sánh nhiều bộ nhận diện để tăng khả năng lấy đủ mép trang; xem trước dùng chế độ nhẹ để giảm nóng máy.</div>
+          <div class="helper">Khi chụp, “Tất cả” so sánh nhiều bộ nhận diện để tăng khả năng lấy đủ mép trang; xem trước dùng chế độ nhẹ để giảm nóng máy. Lựa chọn nhận diện chỉ áp dụng cho tab này.</div>
         </div>
 
         <div class="camera-actions mt-8">
@@ -420,7 +421,7 @@
           </select>
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
           <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files)" />
-          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF tối đa 200 dpi theo ảnh nguồn.</div>
+          <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. PDF giữ độ phân giải ảnh nguồn và dùng PNG không mất dữ liệu, không giới hạn dung lượng trong ứng dụng.</div>
         </div>
 
         <div class="mini-grid mt-8">
@@ -541,6 +542,33 @@
   </div>
 
   <script>
+    const scanSessionId = ScanSession.createId();
+    const SCAN_PAGE_ID = 'HamGiang';
+    const PAGE_STORAGE_PREFIX = 'landScan:' + SCAN_PAGE_ID + ':';
+    const PAGE_STORAGE_KEYS = { apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl', scanMode: PAGE_STORAGE_PREFIX + 'scanMode' };
+    const pageSettings = new Map();
+    let scanGeneration = 0;
+    let scanSequence = 0;
+
+    function readPageSetting(name) {
+      if (pageSettings.has(name)) return pageSettings.get(name);
+      let value = null;
+      try { value = sessionStorage.getItem(PAGE_STORAGE_KEYS[name]); } catch (_) {}
+      if (value === null) {
+        try {
+          value = localStorage.getItem(PAGE_STORAGE_KEYS[name]);
+          if (value === null && SCAN_PAGE_ID === 'HamGiang') value = localStorage.getItem(name === 'apiUrl' ? 'landApiUrl' : 'landScanMode');
+        } catch (_) {}
+      }
+      pageSettings.set(name, value);
+      return value;
+    }
+
+    function writePageSetting(name, value) {
+      pageSettings.set(name, value);
+      try { sessionStorage.setItem(PAGE_STORAGE_KEYS[name], value); } catch (_) {}
+    }
+
     const state = {
       stream: null,
       documentPages: [],
@@ -553,7 +581,7 @@
       pendingRetakeId: null,
       colorCheckFrame: 0,
       grayscaleSamples: 0,
-      scanMode: localStorage.getItem('landScanMode') || 'opencv'
+      scanMode: readPageSetting('scanMode') || 'opencv'
     };
 
     const opencvReady = Promise.resolve(window.cv).then(module => {
@@ -568,98 +596,53 @@
       return false;
     });
 
-    let scanWorker = null;
-    let scanRequestId = 0;
-    const scanRequests = new Map();
-    if (typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function') {
-      try {
-        scanWorker = new Worker('./assets/document-scan-worker.js');
-        scanWorker.onmessage = ({ data }) => {
-          const pending = scanRequests.get(data.id);
-          if (!pending) { if (data.bitmap) data.bitmap.close(); return; }
-          clearTimeout(pending.timer);
-          scanRequests.delete(data.id);
-          if (data.error) { pending.resolve(null); return; }
-          const canvas = document.createElement('canvas');
-          canvas.width = data.bitmap.width;
-          canvas.height = data.bitmap.height;
-          canvas.getContext('2d').drawImage(data.bitmap, 0, 0);
-          data.bitmap.close();
-          pending.resolve({ canvas, detected: data.detected, method: data.method });
-        };
-        scanWorker.onerror = () => {
-          scanWorker.terminate();
-          scanWorker = null;
-          for (const pending of scanRequests.values()) {
-            clearTimeout(pending.timer);
-            pending.resolve(null);
-          }
-          scanRequests.clear();
-        };
-      } catch (error) { console.info('Scan Worker không khả dụng.', error); }
-    }
+    const scanClient = typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function'
+      ? ScanSession.createWorkerClient('./assets/document-scan-worker.js', { sessionId: scanSessionId + ':document', timeoutMs: 120000 })
+      : null;
 
-    async function prepareScanAsync(source, options) {
+    async function prepareScanAsync(source, options = {}) {
+      // Capture this job's settings before any wait or queued recognition work.
+      const mode = state.scanMode;
+      const settings = { ...options };
       await yieldToInterface();
-      if (scanWorker) {
+      if (scanClient && scanClient.available) {
         const bitmap = await createImageBitmap(source);
-        const id = ++scanRequestId;
-        const result = await new Promise(resolve => {
-          const timer = setTimeout(() => {
-            scanRequests.delete(id);
-            // Stop stalled work before using the compatibility path.
-            if (scanWorker) scanWorker.terminate();
-            scanWorker = null;
-            for (const pending of scanRequests.values()) {
-              clearTimeout(pending.timer);
-              pending.resolve(null);
-            }
-            scanRequests.clear();
-            resolve(null);
-          }, 30000);
-          scanRequests.set(id, { resolve, timer });
-          scanWorker.postMessage({ id, bitmap, options, mode: state.scanMode }, [bitmap]);
-        });
-        if (result) return result;
+        const result = await scanClient.request({ bitmap, options: settings, mode }, [bitmap]);
+        if (result && result.bitmap) {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = result.bitmap.width;
+            canvas.height = result.bitmap.height;
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Thiết bị không đủ bộ nhớ để giữ ảnh đầy đủ độ phân giải.');
+            context.drawImage(result.bitmap, 0, 0);
+            return { canvas, detected: result.detected, method: result.method };
+          } finally { result.bitmap.close(); }
+        }
       }
       await opencvReady;
-      return prepareScan(source, options);
+      return prepareScan(source, settings, mode);
     }
 
-    const PDF_DPI = 200;
     let cccdOcrWorker = null;
     let cccdOcrWorkerPromise = null;
     let identityQueue = Promise.resolve();
     let identityGeneration = 0;
-    let qrRequestId = 0;
-    const qrRequests = new Map();
-    let qrWorker = null;
-    try {
-      qrWorker = new Worker('./assets/cccd-qr-worker.js');
-      qrWorker.onmessage = ({ data }) => {
-        const pending = qrRequests.get(data.id);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        qrRequests.delete(data.id);
-        pending.resolve(data.number || '');
-      };
-      qrWorker.onerror = () => {
-        qrWorker.terminate();
-        qrWorker = null;
-        for (const pending of qrRequests.values()) {
-          clearTimeout(pending.timer);
-          pending.resolve('');
-        }
-        qrRequests.clear();
-      };
-    } catch (error) { console.info('QR Worker không khả dụng.', error); }
+    const qrClient = ScanSession.createWorkerClient('./assets/cccd-qr-worker.js', { sessionId: scanSessionId + ':qr', timeoutMs: 30000 });
+
+    window.addEventListener('pagehide', event => {
+      if (event.persisted) return;
+      if (scanClient) scanClient.dispose();
+      qrClient.dispose();
+      if (cccdOcrWorker) cccdOcrWorker.terminate();
+    });
 
     function yieldToInterface() {
       return new Promise(resolve => setTimeout(resolve, 0));
     }
 
     async function readCccdQr(canvas, half = null) {
-      if (!qrWorker) return '';
+      if (!qrClient.available) return '';
       const sourceX = half === 'right' ? Math.floor(canvas.width * 0.4) : 0;
       const sourceWidth = half ? Math.ceil(canvas.width * 0.6) : canvas.width;
       const scale = Math.min(1, 2200 / Math.max(sourceWidth, canvas.height));
@@ -669,29 +652,22 @@
       const ctx = probe.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(canvas, sourceX, 0, sourceWidth, canvas.height, 0, 0, probe.width, probe.height);
       const pixels = ctx.getImageData(0, 0, probe.width, probe.height);
-      const id = ++qrRequestId;
-      return new Promise(resolve => {
-        const timer = setTimeout(() => {
-          qrRequests.delete(id);
-          resolve('');
-        }, 15000);
-        qrRequests.set(id, { resolve, timer });
-        qrWorker.postMessage({ id, width: probe.width, height: probe.height, buffer: pixels.data.buffer }, [pixels.data.buffer]);
-      });
+      const result = await qrClient.request({ width: probe.width, height: probe.height, buffer: pixels.data.buffer }, [pixels.data.buffer]);
+      return result ? result.number || '' : '';
     }
 
     const apiUrlInput = document.getElementById('webAppUrl');
-    apiUrlInput.value = localStorage.getItem('landApiUrl') || apiUrlInput.value;
+    apiUrlInput.value = readPageSetting('apiUrl') || apiUrlInput.value;
 
     function saveApiUrl() {
-      localStorage.setItem('landApiUrl', document.getElementById('webAppUrl').value.trim());
+      writePageSetting('apiUrl', document.getElementById('webAppUrl').value.trim());
     }
 
     document.getElementById('scanMode').value = ['opencv', 'fallback', 'all'].includes(state.scanMode) ? state.scanMode : 'opencv';
 
     function setScanMode(mode) {
       state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
-      localStorage.setItem('landScanMode', state.scanMode);
+      writePageSetting('scanMode', state.scanMode);
       setStatus(`Đã chọn căn chỉnh: ${state.scanMode === 'opencv' ? 'OpenCV' : state.scanMode === 'fallback' ? 'Dự phòng' : 'Tất cả'}`, 'success');
     }
 
@@ -940,8 +916,8 @@
 
     function createCameraConstraints() {
       return {
-        width: { ideal: 1280 },
-        height: { ideal: 960 },
+        width: { ideal: 3840 },
+        height: { ideal: 2160 },
         frameRate: { ideal: 15, max: 20 }
       };
     }
@@ -1018,6 +994,7 @@
     async function capturePage(type) {
       if (state.processing || state.saving) return;
       state.processing = true;
+      const generation = scanGeneration;
       try {
         const video = document.getElementById('video');
         if (!video || !video.videoWidth) {
@@ -1034,16 +1011,28 @@
         let photoBitmap = null;
         if (track && 'ImageCapture' in window) {
           try {
-            const photo = await new ImageCapture(track).takePhoto();
+            const camera = new ImageCapture(track);
+            let photo;
+            try {
+              const capabilities = camera.getPhotoCapabilities ? await camera.getPhotoCapabilities() : {};
+              const settings = {};
+              if (capabilities.imageWidth && capabilities.imageWidth.max > 0) settings.imageWidth = capabilities.imageWidth.max;
+              if (capabilities.imageHeight && capabilities.imageHeight.max > 0) settings.imageHeight = capabilities.imageHeight.max;
+              photo = await camera.takePhoto(settings);
+            } catch (_) { photo = await camera.takePhoto(); }
             photoBitmap = await createImageBitmap(photo);
           } catch (captureError) {
             console.info('Ảnh tĩnh độ phân giải cao không khả dụng, dùng khung camera hiện tại.', captureError);
           }
         }
 
+        if (generation !== scanGeneration) {
+          if (photoBitmap) photoBitmap.close();
+          return;
+        }
         const source = photoBitmap || video;
-        canvas.width = source.width || source.videoWidth || 1280;
-        canvas.height = source.height || source.videoHeight || 720;
+        canvas.width = photoBitmap ? photoBitmap.width : video.videoWidth;
+        canvas.height = photoBitmap ? photoBitmap.height : video.videoHeight;
         canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
         if (photoBitmap && photoBitmap.close) photoBitmap.close();
 
@@ -1051,7 +1040,8 @@
         originalCanvas.width = canvas.width;
         originalCanvas.height = canvas.height;
         originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
-        const scan = await prepareScanAsync(canvas, { targetLongEdge: captureType === 'document' ? 3308 : 1800, documentType: captureType, preferSpread: captureType === 'document' });
+        const scan = await prepareScanAsync(canvas, { documentType: captureType, preferSpread: captureType === 'document' });
+        if (generation !== scanGeneration) return;
         const item = {
           id: state.pendingRetakeId || createScanId(),
           type: captureType,
@@ -1231,6 +1221,8 @@
     async function processImageFiles(fileList) {
       if (state.processing || state.saving) return;
       state.processing = true;
+      const generation = scanGeneration;
+      const uploadType = document.getElementById('imageUploadType').value;
       try {
         const files = Array.from(fileList || []).filter(file => file.type && file.type.indexOf('image/') === 0);
         if (!files.length) return;
@@ -1239,8 +1231,10 @@
         try {
           const filesToProcess = state.pendingRetakeId ? files.slice(0, 1) : files;
           for (const file of filesToProcess) {
+            if (generation !== scanGeneration) break;
             const sourceBitmap = await decodeImageFile(file);
             try {
+              if (generation !== scanGeneration) break;
               const sourceCanvas = document.createElement('canvas');
               sourceCanvas.width = sourceBitmap.width;
               sourceCanvas.height = sourceBitmap.height;
@@ -1249,8 +1243,9 @@
               const pendingItem = state.pendingRetakeId
                 ? [...state.documentPages, ...state.cccdPhotos].find(existing => existing.id === state.pendingRetakeId)
                 : null;
-              const itemType = pendingItem ? pendingItem.type : document.getElementById('imageUploadType').value;
-              const scan = await prepareScanAsync(sourceCanvas, { targetLongEdge: itemType === 'document' ? 3308 : 1800, documentType: itemType, preferSpread: itemType === 'document' });
+              const itemType = pendingItem ? pendingItem.type : uploadType;
+              const scan = await prepareScanAsync(sourceCanvas, { documentType: itemType, preferSpread: itemType === 'document' });
+              if (generation !== scanGeneration) break;
               const item = {
                 id: state.pendingRetakeId || createScanId(),
                 type: itemType,
@@ -1313,8 +1308,8 @@
     }
 
     function renderImageComparison(originalCanvas, processedCanvas, fileName, scan) {
-      const originalUrl = originalCanvas.toDataURL('image/jpeg', 0.9);
-      const processedUrl = processedCanvas.toDataURL('image/jpeg', 0.92);
+      const originalUrl = createScanPreviewUrl(originalCanvas);
+      const processedUrl = createScanPreviewUrl(processedCanvas);
       const holder = document.createElement('div');
       holder.className = 'thumb comparison';
       holder.innerHTML = `
@@ -1415,7 +1410,7 @@
     }
 
     function createScanId() {
-      return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      return `${scanSessionId}-${++scanSequence}`;
     }
 
     function getScanCollection(type) {
@@ -1470,16 +1465,17 @@
     }
 
     function createScanPreviewUrl(sourceCanvas) {
-      const maxEdge = 900;
+      const maxEdge = 1600;
       const scale = Math.min(1, maxEdge / Math.max(sourceCanvas.width, sourceCanvas.height));
       const preview = document.createElement('canvas');
       preview.width = Math.max(1, Math.round(sourceCanvas.width * scale));
       preview.height = Math.max(1, Math.round(sourceCanvas.height * scale));
       preview.getContext('2d').drawImage(sourceCanvas, 0, 0, preview.width, preview.height);
-      return preview.toDataURL('image/jpeg', 0.82);
+      return preview.toDataURL('image/jpeg', 0.96);
     }
 
     function deleteScan(scanId) {
+      if (state.processing || state.saving) return;
       [state.documentPages, state.cccdPhotos].forEach(collection => {
         const index = collection.findIndex(item => item.id === scanId);
         if (index >= 0) collection.splice(index, 1);
@@ -1492,6 +1488,7 @@
     }
 
     async function retakeScan(scanId) {
+      if (state.processing || state.saving) return;
       const item = [...state.documentPages, ...state.cccdPhotos].find(scan => scan.id === scanId);
       if (!item) return;
       state.pendingRetakeId = scanId;
@@ -1500,6 +1497,7 @@
     }
 
     function replaceScanFromFile(scanId) {
+      if (state.processing || state.saving) return;
       if (![...state.documentPages, ...state.cccdPhotos].some(item => item.id === scanId)) return;
       state.pendingRetakeId = scanId;
       document.getElementById('imageFiles').click();
@@ -1953,7 +1951,7 @@
         Math.hypot(corners[1].x - corners[2].x, corners[1].y - corners[2].y),
         Math.hypot(corners[0].x - corners[3].x, corners[0].y - corners[3].y)
       );
-      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge || 3000);
+      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
       const width = output.width;
       const height = output.height;
       const result = state.scanner.extractPaper(sourceCanvas, Math.round(width), Math.round(height), points);
@@ -1972,7 +1970,7 @@
         Math.hypot(topRight.x - bottomRight.x, topRight.y - bottomRight.y),
         Math.hypot(topLeft.x - bottomLeft.x, topLeft.y - bottomLeft.y)
       );
-      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge || 3000);
+      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
       const warpedCanvas = document.createElement('canvas');
       warpedCanvas.width = output.width;
       warpedCanvas.height = output.height;
@@ -2005,43 +2003,32 @@
     }
 
     function fitScanDimensions(width, height, maxEdge) {
-      const scale = Math.min(1, (maxEdge || 3000) / Math.max(width, height));
+      // Keep native pixels unless a caller explicitly requests a smaller preview.
+      const scale = Number.isFinite(maxEdge) && maxEdge > 0
+        ? Math.min(1, maxEdge / Math.max(width, height)) : 1;
       return {
         width: Math.max(1, Math.round(width * scale)),
         height: Math.max(1, Math.round(height * scale))
       };
     }
 
-    function prepareScan(sourceCanvas, opts) {
-      const bounds = detectDocumentBounds(sourceCanvas, state.scanMode, opts);
-      const cropCanvas = document.createElement('canvas');
-      let cropCtx;
+    function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
+      const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
+      let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
-        const corrected = bounds.method === 'jscanify'
+        target = bounds.method === 'jscanify'
           ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, opts.targetLongEdge)
           : warpDocumentPerspective(sourceCanvas, bounds.corners, opts.targetLongEdge);
-        cropCanvas.width = corrected.width;
-        cropCanvas.height = corrected.height;
-        cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-        cropCtx.drawImage(corrected, 0, 0);
       } else {
-        cropCanvas.width = bounds.width;
-        cropCanvas.height = bounds.height;
-        cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-        cropCtx.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
+        const output = fitScanDimensions(bounds.width, bounds.height, opts.targetLongEdge);
+        target = document.createElement('canvas');
+        target.width = output.width;
+        target.height = output.height;
+        const context = target.getContext('2d', { willReadFrequently: true });
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, target.width, target.height);
       }
-
-      const target = document.createElement('canvas');
-      const targetLongEdge = Math.min(opts.targetLongEdge || 3000, Math.max(cropCanvas.width, cropCanvas.height));
-      const ratio = cropCanvas.width / cropCanvas.height;
-      target.width = ratio >= 1 ? targetLongEdge : Math.max(1, Math.round(targetLongEdge * ratio));
-      target.height = ratio >= 1 ? Math.max(1, Math.round(targetLongEdge / ratio)) : targetLongEdge;
-      const targetCtx = target.getContext('2d');
-      targetCtx.drawImage(cropCanvas, 0, 0, target.width, target.height);
-      if (state.opencvReady) {
-        correctDocumentLighting(target);
-      }
-
+      if (state.opencvReady) correctDocumentLighting(target);
       return { canvas: target, detected: bounds.detected, method: bounds.method };
     }
 
@@ -2108,27 +2095,15 @@
       }
     }
 
-    function preparePdfImage(canvas, pageWidth, pageHeight, quality = 0.84) {
+    function preparePdfImage(canvas, pageWidth, pageHeight) {
       const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
-      const widthMm = canvas.width * ratio;
-      const heightMm = canvas.height * ratio;
-      // Only downsample: 200 dpi is a ceiling, never invent missing source detail.
-      const scale = Math.min(1, widthMm / 25.4 * PDF_DPI / canvas.width,
-        heightMm / 25.4 * PDF_DPI / canvas.height);
-      const image = document.createElement('canvas');
-      image.width = Math.max(1, Math.floor(canvas.width * scale));
-      image.height = Math.max(1, Math.floor(canvas.height * scale));
-      const context = image.getContext('2d');
-      context.fillStyle = '#fff';
-      context.fillRect(0, 0, image.width, image.height);
-      context.imageSmoothingQuality = 'high';
-      context.drawImage(canvas, 0, 0, image.width, image.height);
-      const data = image.toDataURL('image/jpeg', quality);
-      image.width = image.height = 1;
-      return { data, widthMm, heightMm };
+      // PNG preserves the source pixels; page placement never resamples the image.
+      const data = canvas.toDataURL('image/png');
+      if (!data || data === 'data:,') throw new Error('Không thể xuất ảnh đầy đủ độ phân giải trên thiết bị này.');
+      return { data, widthMm: canvas.width * ratio, heightMm: canvas.height * ratio };
     }
 
-    async function createLocalPdf(scans, original = false, quality = 0.84) {
+    async function createLocalPdf(scans, original = false) {
       if (!scans.length) throw new Error('Không có ảnh để tạo PDF.');
       const { jsPDF } = window.jspdf;
       let pdf;
@@ -2145,10 +2120,10 @@
         const pageHeight = pdf.internal.pageSize.getHeight();
         // Keep cards at their physical size instead of enlarging them to fill A4.
         const image = isDocument
-          ? preparePdfImage(canvas, pageWidth, pageHeight, quality)
+          ? preparePdfImage(canvas, pageWidth, pageHeight)
           : preparePdfImage(canvas, canvas.width >= canvas.height ? 85.6 : 53.98,
-              canvas.width >= canvas.height ? 53.98 : 85.6, quality);
-        pdf.addImage(image.data, 'JPEG', (pageWidth - image.widthMm) / 2,
+              canvas.width >= canvas.height ? 53.98 : 85.6);
+        pdf.addImage(image.data, 'PNG', (pageWidth - image.widthMm) / 2,
           (pageHeight - image.heightMm) / 2, image.widthMm, image.heightMm, undefined, 'FAST');
       }
       return pdf.output('datauristring');
@@ -2158,18 +2133,8 @@
       return createLocalPdf(scans);
     }
 
-    async function buildOriginalBackupPdf(scans, maxBytes = 3 * 1000 * 1000) {
-      for (const quality of [0.84, 0.76, 0.68]) {
-        const data = await createLocalPdf(scans, true, quality);
-        if (estimateDataUriBytes(data) < maxBytes) return data;
-      }
-      throw new Error('PDF 200 dpi vượt 3 MB. Hãy lưu ít trang hơn mỗi lần để giữ chi tiết.');
-    }
-
-    function estimateDataUriBytes(dataUri) {
-      const base64 = dataUri.slice(dataUri.indexOf(',') + 1);
-      const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
-      return Math.floor(base64.length * 3 / 4) - padding;
+    async function buildOriginalBackupPdf(scans) {
+      return createLocalPdf(scans, true);
     }
 
     function buildPdfFileName() {
@@ -2214,7 +2179,7 @@
       document.getElementById('btnSaveRecord').disabled = true;
       try {
         await identityQueue;
-        setStatus('Đang tạo PDF và nén bản sao gốc...', 'normal');
+        setStatus('Đang tạo PDF đầy đủ độ phân giải và bản sao gốc...', 'normal');
         const allScans = [...state.documentPages, ...state.cccdPhotos];
         const originalBackupFileName = buildOriginalBackupFileName();
         const pdfOriginalBase64 = await buildOriginalBackupPdf(allScans);
@@ -2256,9 +2221,9 @@
           if (result.fileGCN) document.getElementById('fileGCN').value = result.fileGCN;
           if (result.fileCCCD) document.getElementById('fileCCCD').value = result.fileCCCD;
           renderRecordFiles({ fileGCN: result.fileGCN, fileCCCD: result.fileCCCD, fileUrl: result.fileUrl });
-          alert(`${result.message || 'Lưu thành công.'}\nPDF GCN và CCCD (nếu có) đã lưu riêng trên cùng hồ sơ.${result.originalBackupSaved ? '\nĐã lưu bản sao trước căn chỉnh, nén tối đa 200 dpi và dưới 3 MB.' : ''}${result.warning ? `\n${result.warning}` : ''}`);
+          alert(`${result.message || 'Lưu thành công.'}\nPDF GCN và CCCD (nếu có) đã lưu riêng trên cùng hồ sơ.${result.originalBackupSaved ? '\nĐã lưu bản sao trước căn chỉnh, giữ độ phân giải nguồn và không nén mất dữ liệu.' : ''}${result.warning ? `\n${result.warning}` : ''}`);
         } else {
-          alert(result.message || 'Lưu thông tin lên Google Sheet thành công.');
+          alert([result.message || 'Lưu thông tin lên Google Sheet thành công.', result.warning].filter(Boolean).join('\n'));
         }
 
         state.selectedRowIndex = null;
@@ -2293,6 +2258,8 @@
     }
 
     function clearForm() {
+      if (state.saving) { setStatus('Đang lưu hồ sơ, vui lòng chờ hoàn tất.', 'normal'); return; }
+      scanGeneration++;
       identityGeneration++;
       ['tenXaCu','hoTenCSD','soHieuToBanDoMoi','soThuTuThuaMoi','dienTich','loaiMucDichSuDung','soHieuToBanDoCu','soThuTuThuaCu','ap','theChap','fileGCN','fileCCCD','soCCCD','ocrText','searchMapSheetOld','searchPlotOld']
         .forEach(id => { const node = document.getElementById(id); if (node) node.value = ''; });

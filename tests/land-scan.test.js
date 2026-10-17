@@ -5,34 +5,157 @@ const assert = require('assert');
 const path = require('path');
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'HamGiang.html'), 'utf8');
-function functionCode(name) {
-  const start = html.search(new RegExp('    (?:async )?function ' + name + '\\('));
+function functionCode(name, source = html) {
+  const start = source.search(new RegExp('    (?:async )?function ' + name + '\\('));
   assert(start >= 0, name);
-  const tail = html.slice(start + 1);
+  const tail = source.slice(start + 1);
   const end = tail.search(/\n    (?:async )?function /);
-  return html.slice(start, end < 0 ? html.length : start + 1 + end);
+  return source.slice(start, end < 0 ? source.length : start + 1 + end);
 }
-const images = [];
-const pages = [];
-function canvas() {
-  return { width: 1, height: 1, getContext() { return { fillRect() {}, drawImage() {} }; },
-    toDataURL(type, quality) { images.push({ width: this.width, height: this.height, type, quality }); return 'data:image/jpeg;base64,AA=='; } };
-}
-class PDF {
-  constructor(options) { this.addPage(options.format, options.orientation); this.internal = { pageSize: {
-    getWidth: () => this.width, getHeight: () => this.height } }; }
-  addPage(format, orientation) {
-    const size = format === 'a3' ? [297, 420] : [210, 297];
-    this.width = size[orientation === 'landscape' ? 1 : 0];
-    this.height = size[orientation === 'landscape' ? 0 : 1];
-    pages.push({ format, orientation });
+
+function qualityHarness(source) {
+  const images = [], pages = [], placements = [];
+  let outputCount = 0;
+  let pdfOutput = 'data:application/pdf;base64,AA==';
+  function canvas(width = 1, height = 1, content = '') {
+    const value = { width, height, content };
+    value.getContext = () => ({
+      fillRect() {},
+      drawImage(image) { value.content = image.content; },
+      getImageData() { return {}; }
+    });
+    value.toDataURL = (type, quality) => {
+      images.push({ width: value.width, height: value.height, type, quality, content: value.content });
+      return 'data:' + type + ';base64,' + Buffer.from(value.content).toString('base64');
+    };
+    return value;
   }
-  addImage(data, type, x, y, width, height) { assert(width <= this.width && height <= this.height); }
-  output() { return 'data:application/pdf;base64,AA=='; }
+  class PDF {
+    constructor(options) { this.addPage(options.format, options.orientation); this.internal = { pageSize: {
+      getWidth: () => this.width, getHeight: () => this.height } }; }
+    addPage(format, orientation) {
+      const size = format === 'a3' ? [297, 420] : [210, 297];
+      this.width = size[orientation === 'landscape' ? 1 : 0];
+      this.height = size[orientation === 'landscape' ? 0 : 1];
+      pages.push({ format, orientation });
+    }
+    addImage(data, type, x, y, width, height, alias, compression) {
+      assert(width <= this.width + 1e-8 && height <= this.height + 1e-8, 'Images fit inside their physical PDF pages.');
+      assert(Math.abs(x - (this.width - width) / 2) < 1e-8, 'Images are horizontally centered.');
+      assert(Math.abs(y - (this.height - height) / 2) < 1e-8, 'Images are vertically centered.');
+      placements.push({ data, type, width, height, compression });
+    }
+    output() { outputCount++; return pdfOutput; }
+  }
+  function Mat() {}
+  Mat.prototype.delete = function () {};
+  const cv = {
+    Mat,
+    matFromImageData: () => new Mat(),
+    matFromArray: () => new Mat(),
+    getPerspectiveTransform: () => new Mat(),
+    Size: function (width, height) { this.width = width; this.height = height; },
+    warpPerspective() {},
+    imshow() {}
+  };
+  const state = {
+    scanMode: 'auto', opencvReady: false,
+    scanner: { extractPaper: (image, width, height) => canvas(width, height, image.content) }
+  };
+  let bounds;
+  const context = vm.createContext({ document: { createElement: () => canvas() },
+    window: { jspdf: { jsPDF: PDF }, cv }, state,
+    detectDocumentBounds: () => bounds,
+    correctDocumentLighting() {}, yieldToInterface: () => Promise.resolve() });
+  const names = ['preparePdfImage', 'createLocalPdf', 'buildOriginalBackupPdf', 'fitScanDimensions',
+    'extractDocumentWithJscanify', 'warpDocumentPerspective', 'prepareScan'];
+  vm.runInContext(names.map(name => functionCode(name, source)).join('\n'), context);
+  return {
+    context, images, pages, placements, canvas,
+    setBounds(value) { bounds = value; },
+    setPdfOutput(value) { pdfOutput = value; },
+    outputCount: () => outputCount
+  };
 }
-const context = vm.createContext({ document: { createElement: canvas }, window: { jspdf: { jsPDF: PDF } },
-  PDF_DPI: 200, yieldToInterface: () => Promise.resolve() });
-vm.runInContext(functionCode('preparePdfImage') + '\n' + functionCode('createLocalPdf'), context);
+
+async function assertNativeQuality(file) {
+  const harness = qualityHarness(fs.readFileSync(path.join(root, file), 'utf8'));
+  const context = harness.context;
+  const dimensions = value => [value.width, value.height];
+  for (const limit of [undefined, 0, -1, Infinity, NaN, 10000]) {
+    assert.deepStrictEqual(dimensions(context.fitScanDimensions(6000, 4243, limit)), [6000, 4243], file + ': native resolution is the default.');
+  }
+  assert.deepStrictEqual(dimensions(context.fitScanDimensions(6000, 4243, 2400)), [2400, 1697], file + ': an explicit preview limit is respected.');
+  assert.deepStrictEqual(dimensions(context.fitScanDimensions(1200, 849, 2400)), [1200, 849], file + ': small images are never upscaled.');
+
+  const source = harness.canvas(6600, 4800, 'source');
+  const bounds = { x: 100, y: 100, width: 6200, height: 4300, detected: true, method: 'fallback' };
+  harness.setBounds(bounds);
+  assert.deepStrictEqual(dimensions(context.prepareScan(source).canvas), [6200, 4300], file + ': default cropping preserves the cropped image pixels.');
+  assert.deepStrictEqual(dimensions(context.prepareScan(source, { targetLongEdge: 3100 }).canvas), [3100, 2150]);
+  const corners = [{ x: 100, y: 100 }, { x: 6300, y: 100 }, { x: 6300, y: 4400 }, { x: 100, y: 4400 }];
+  for (const method of ['jscanify', 'opencv']) {
+    harness.setBounds(Object.assign({}, bounds, { method, corners }));
+    assert.deepStrictEqual(dimensions(context.prepareScan(source).canvas), [6200, 4300], file + ': ' + method + ' preserves native perspective-corrected dimensions.');
+    assert.deepStrictEqual(dimensions(context.prepareScan(source, { targetLongEdge: 3100 }).canvas), [3100, 2150]);
+  }
+
+  const scans = [
+    { type: 'document', canvas: harness.canvas(6000, 4243, 'landscape-processed'), originalCanvas: harness.canvas(7200, 5100, 'landscape-original') },
+    { type: 'document', canvas: harness.canvas(4243, 6000, 'portrait-processed'), originalCanvas: harness.canvas(5100, 7200, 'portrait-original') },
+    { type: 'cccd-front', canvas: harness.canvas(1600, 1009, 'card-processed'), originalCanvas: harness.canvas(3200, 2018, 'card-original') },
+    { type: 'cccd-back', canvas: harness.canvas(1009, 1600, 'vertical-card-processed'), originalCanvas: harness.canvas(2018, 3200, 'vertical-card-original') },
+    { type: 'document', canvas: harness.canvas(1200, 849, 'small-processed'), originalCanvas: harness.canvas(1200, 849, 'small-original') }
+  ];
+  await context.createLocalPdf(scans);
+  assert.deepStrictEqual(harness.images.map(dimensions), scans.map(item => dimensions(item.canvas)), file + ': PDFs embed every native source pixel.');
+  assert.deepStrictEqual(harness.images.map(image => image.content), scans.map(item => item.canvas.content), file + ': normal PDFs use processed images.');
+  assert(harness.images.every(image => image.type === 'image/png' && image.quality === undefined), file + ': lossless PNG does not set JPEG quality.');
+  assert(harness.placements.every(image => image.type === 'PNG' && image.compression === 'FAST'), file + ': jsPDF receives lossless PNG images.');
+  assert.deepStrictEqual(harness.pages.map(page => [page.format, page.orientation]), [
+    ['a3', 'landscape'], ['a3', 'portrait'], ['a4', 'portrait'], ['a4', 'portrait'], ['a3', 'landscape']
+  ]);
+  const card = harness.placements[2], verticalCard = harness.placements[3];
+  assert(Math.abs(card.width - 85.6) < 0.01 && card.height <= 53.98 + 1e-8, file + ': horizontal CCCD keeps its physical dimensions.');
+  assert(Math.abs(verticalCard.height - 85.6) < 0.01 && verticalCard.width <= 53.98 + 1e-8, file + ': vertical CCCD keeps its physical dimensions.');
+
+  const largePdf = 'data:application/pdf;base64,' + 'AAAA'.repeat(1100000);
+  assert(Buffer.from(largePdf.split(',')[1], 'base64').length > 3 * 1024 * 1024);
+  harness.setPdfOutput(largePdf);
+  const priorOutputs = harness.outputCount(), priorImages = harness.images.length;
+  assert.strictEqual(await context.buildOriginalBackupPdf(scans), largePdf, file + ': native backup PDFs may exceed the old 3 MB cap.');
+  assert.strictEqual(harness.outputCount(), priorOutputs + 1, file + ': backups generate once without lossy retries.');
+  const originals = harness.images.slice(priorImages);
+  assert.strictEqual(originals.length, scans.length);
+  assert.deepStrictEqual(originals.map(dimensions), scans.map(item => dimensions(item.originalCanvas)), file + ': original backups preserve native dimensions.');
+  assert.deepStrictEqual(originals.map(image => image.content), scans.map(item => item.originalCanvas.content), file + ': backups use original rather than processed pixels.');
+  assert(originals.every(image => image.type === 'image/png' && image.quality === undefined));
+}
+async function assertNativeCamera(file) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  const video = { width: 320, height: 240, videoWidth: 4032, videoHeight: 3024 };
+  const draws = [], added = [];
+  const makeCanvas = () => ({ width: 1, height: 1, getContext: () => ({ drawImage: (...args) => draws.push(args) }) });
+  const scanCanvas = makeCanvas();
+  const state = { processing: false, saving: false, pendingRetakeId: null, stream: null, documentPages: [], cccdPhotos: [] };
+  const context = vm.createContext({ state, window: {}, scanGeneration: 0,
+    document: { getElementById: id => id === 'video' ? video : scanCanvas, createElement: makeCanvas },
+    prepareScanAsync: async (canvas, options) => {
+      assert.deepStrictEqual([canvas.width, canvas.height], [4032, 3024]);
+      assert.strictEqual(options.targetLongEdge, undefined, 'Camera scans must not impose an output cap.');
+      return { canvas, detected: true, method: 'opencv' };
+    },
+    createScanId: () => 'camera-test', addScanItem: item => added.push(item), setStatus() {},
+    alert: message => { throw new Error(message); }
+  });
+  vm.runInContext(functionCode('capturePage', source), context);
+  await context.capturePage('document');
+  assert.strictEqual(draws[0][0], video, file + ': video fallback draws the actual video source.');
+  assert.strictEqual(added.length, 1);
+  assert.deepStrictEqual([added[0].originalCanvas.width, added[0].originalCanvas.height], [4032, 3024]);
+  assert.strictEqual(state.processing, false, file + ': capture releases the processing state.');
+}
+
 const ocrContext = vm.createContext({});
 vm.runInContext(functionCode('extractConfidentCccdNumber'), ocrContext);
 assert.strictEqual(ocrContext.extractConfidentCccdNumber({ confidence: 30,
@@ -50,21 +173,14 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
   assert.strictEqual(qrContext.parseCccdQr(invalid), '');
 }
 (async () => {
-  await context.createLocalPdf([
-    { type: 'document', canvas: { width: 6000, height: 4243 } },
-    { type: 'document', canvas: { width: 4243, height: 6000 } },
-    { type: 'cccd-front', canvas: { width: 1600, height: 1009 } },
-    { type: 'document', canvas: { width: 1200, height: 849 } }
-  ]);
-  assert(images[0].width <= 3308 && images[0].height <= 2338);
-  assert(images[1].height <= 3308 && images[1].width <= 2338);
-  assert(images[2].width <= 674 && images[2].height <= 425);
-  assert.strictEqual(images[3].width, 1200); // Never upscale a low resolution source.
-  assert.strictEqual(pages[0].orientation, 'landscape');
-  assert.strictEqual(pages[1].orientation, 'portrait');
+  for (const file of ['HamGiang.html', 'TraCu.html', 'LongHiep.html', 'TapSon.html', 'LuuNghiepAnh.html', 'DaiAn.html']) {
+    await assertNativeQuality(file);
+    await assertNativeCamera(file);
+  }
   const gs = fs.readFileSync(path.join(root, 'code.gs'), 'utf8');
   const rows = [], savedNames = [];
   const server = vm.createContext({ ensureSheet: () => ({ getLastRow: () => 1, appendRow: row => rows.push(row) }),
+    withScriptLock: callback => callback(),
     ensureFolder: () => ({}), normalizeValue: value => value == null ? '' : String(value).trim(),
     savePdfToDrive: (folder, base64, name) => { savedNames.push(name); return { fileId: String(savedNames.length), fileUrl: 'local-test' }; },
     normalizeProcessingStatus: () => 'Chưa xử lý' });
@@ -77,5 +193,5 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
   assert.strictEqual(result.soCCCD, '000000000000');
   assert.strictEqual(result.fileId, '1');
   assert.strictEqual(result.updated, false);
-  console.log('PASS: QR payload validation, PDF 200 dpi/no upscale/orientation, original filename and save response');
+  console.log('PASS: QR/OCR validation, native scan pixels, lossless PNG PDFs/backup over 3 MB, page/card dimensions, original filename and save response');
 })().catch(error => { console.error(error); process.exitCode = 1; });

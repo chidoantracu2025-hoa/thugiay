@@ -12,6 +12,8 @@ function parseCccdQr(text) {
 
 self.onmessage = ({ data }) => {
   const { id, width, height, buffer } = data;
+  const envelope = { id };
+  if (typeof data.sessionId === 'string') envelope.sessionId = data.sessionId;
   try {
     const pixels = new Uint8ClampedArray(buffer);
     let number = '';
@@ -20,8 +22,8 @@ self.onmessage = ({ data }) => {
       if (result) number = parseCccdQr(result.data);
       if (number) break;
     }
-    self.postMessage({ id, number });
+    self.postMessage(Object.assign(envelope, { number }));
   } catch (error) {
-    self.postMessage({ id, number: '' });
+    self.postMessage(Object.assign(envelope, { number: '' }));
   }
 };

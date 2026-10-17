@@ -14,6 +14,8 @@
   </style>
   <script src="../opencv.js"></script>
   <script src="../assets/a4-document-detector.js"></script>
+  <script src="../assets/scan-session.js"></script>
+  <script src="../assets/vendor/jspdf.umd.min.js"></script>
 </head>
 <body>
   <h1>Document detection browser regression</h1>
@@ -27,6 +29,7 @@
     const results = [];
     const output = document.getElementById('results');
     let scan;
+    let pdf;
     let cvModule;
     function assert(condition, message) { if (!condition) throw new Error(message); }
     function record(name, status, detail = '') {
@@ -173,6 +176,110 @@
         return `${remote.width}×${remote.height}; mean RGB difference ${average.toFixed(3)}`;
       } finally { clearTimeout(timer); worker.terminate(); }
     }
+    function nativeDetailFixture() {
+      const canvas = createCanvas(3600, 2500);
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#192432'; ctx.font = '10px monospace';
+      for (let y = 40; y < 2300; y += 37) ctx.fillText('Native-resolution fine text: 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ', 28, y);
+      for (let x = 0; x < 64; x++) {
+        ctx.fillStyle = x % 2 ? '#1371e5' : '#ef371d';
+        ctx.fillRect(1750 + x, 1250, 1, 16);
+      }
+      const color = ctx.createImageData(32, 32);
+      for (let y = 0; y < 32; y++) {
+        for (let x = 0; x < 32; x++) {
+          const i = (y * 32 + x) * 4;
+          color.data[i] = (x * 47 + y * 3) % 256;
+          color.data[i + 1] = (x * 5 + y * 113) % 256;
+          color.data[i + 2] = (x * 229 + y * 17) % 256;
+          color.data[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(color, 3536, 2440);
+      return canvas;
+    }
+    async function verifyLosslessPng(canvas) {
+      const image = pdf.preparePdfImage(canvas, 420, 297);
+      assert(image.data.startsWith('data:image/png;base64,'), 'PDF source was not encoded as PNG');
+      const blob = await (await fetch(image.data)).blob();
+      const bitmap = await createImageBitmap(blob);
+      try {
+        assert(bitmap.width === canvas.width && bitmap.height === canvas.height,
+          `PNG dimensions ${bitmap.width}×${bitmap.height} differ from the native ${canvas.width}×${canvas.height}`);
+        const source = canvas.getContext('2d', { willReadFrequently: true });
+        const patches = [[28, 30, 440, 18], [1750, 1250, 64, 16], [3536, 2440, 32, 32]];
+        for (const [x, y, width, height] of patches) {
+          const patch = createCanvas(width, height), ctx = patch.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(bitmap, x, y, width, height, 0, 0, width, height);
+          const expected = source.getImageData(x, y, width, height).data;
+          const actual = ctx.getImageData(0, 0, width, height).data;
+          for (let i = 0; i < expected.length; i++) {
+            assert(actual[i] === expected[i], `PNG changed a fine-detail pixel at patch ${x},${y}, channel ${i}`);
+          }
+        }
+        return `${bitmap.width}×${bitmap.height}; fine text and one-pixel color detail are exact`;
+      } finally { bitmap.close(); }
+    }
+    async function verifyNativePdf(canvas) {
+      const data = await pdf.createLocalPdf([{ type: 'document', canvas }]);
+      const binary = atob(data.slice(data.indexOf(',') + 1));
+      assert(/\/Subtype\s*\/Image\b/.test(binary), 'PDF has no embedded image');
+      assert(/\/Width\s+3600\b/.test(binary) && /\/Height\s+2500\b/.test(binary), 'PDF image dimensions were reduced below the native 3600×2500');
+      assert(!/\/DCTDecode\b/.test(binary), 'PDF replaced the lossless image with JPEG compression');
+      return 'PDF embeds a 3600×2500 image without JPEG compression';
+    }
+    async function compareConcurrentSessions(canvas) {
+      assert(window.ScanSession && typeof window.ScanSession.createWorkerClient === 'function', 'ScanSession script is missing');
+      const clients = [
+        window.ScanSession.createWorkerClient('../assets/document-scan-worker.js', { sessionId: 'browser-regression-A', timeoutMs: 30000 }),
+        window.ScanSession.createWorkerClient('../assets/document-scan-worker.js', { sessionId: 'browser-regression-B', timeoutMs: 30000 })
+      ];
+      const requests = [
+        { client: 0, id: 1, mode: 'opencv', options: { documentType: 'document', preferSpread: true, targetLongEdge: 420 } },
+        { client: 1, id: 1, mode: 'fallback', options: { documentType: 'cccd-front', preferSpread: false, targetLongEdge: 300 } },
+        { client: 0, id: 2, mode: 'fallback', options: { documentType: 'document', preferSpread: false, targetLongEdge: 260 } },
+        { client: 1, id: 2, mode: 'opencv', options: { documentType: 'document', preferSpread: true, targetLongEdge: 360 } }
+      ];
+      let replies = [];
+      const inputBitmaps = [];
+      try {
+        assert(clients.every(client => client.available), 'A session worker could not be created');
+        const expected = requests.map(request => scan.prepareScan(canvas, request.options, request.mode));
+        const bitmaps = await Promise.all(requests.map(async () => {
+          const bitmap = await createImageBitmap(canvas); inputBitmaps.push(bitmap); return bitmap;
+        }));
+        replies = await Promise.all(requests.map((request, index) => clients[request.client].request({
+          bitmap: bitmaps[index], options: request.options, mode: request.mode
+        }, [bitmaps[index]])));
+        const sizes = [];
+        for (let index = 0; index < requests.length; index++) {
+          const request = requests[index], reply = replies[index], main = expected[index];
+          assert(reply && reply.bitmap, `Session ${request.client}, request ${request.id} did not return an image`);
+          assert(reply.sessionId === clients[request.client].sessionId && reply.id === request.id,
+            `Session/request identity was mixed for request ${index}`);
+          assert(reply.detected === main.detected && reply.method === main.method, `Detection settings leaked into request ${index}`);
+          assert(reply.bitmap.width === main.canvas.width && reply.bitmap.height === main.canvas.height,
+            `Output dimensions do not match request ${index}'s mode and options`);
+          const remote = createCanvas(reply.bitmap.width, reply.bitmap.height);
+          remote.getContext('2d').drawImage(reply.bitmap, 0, 0);
+          const a = main.canvas.getContext('2d').getImageData(0, 0, remote.width, remote.height).data;
+          const b = remote.getContext('2d').getImageData(0, 0, remote.width, remote.height).data;
+          let difference = 0, count = 0;
+          for (let i = 0; i < a.length; i += 64) {
+            for (let c = 0; c < 3; c++) { difference += Math.abs(a[i + c] - b[i + c]); count++; }
+          }
+          assert(difference / count <= 2, `Concurrent request ${index} differs from its main-thread result`);
+          sizes.push(`${remote.width}×${remote.height}`);
+        }
+        assert(new Set(sizes).size === requests.length, 'Concurrent requests did not exercise distinct output settings');
+        return `two independent sessions, four exact request IDs; outputs ${sizes.join(', ')}`;
+      } finally {
+        replies.forEach(reply => { if (reply && reply.bitmap) reply.bitmap.close(); });
+        inputBitmaps.forEach(bitmap => { try { bitmap.close(); } catch (_) {} });
+        clients.forEach(client => client.dispose());
+      }
+    }
     async function loadImage(url) {
       const image = new Image();
       await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error(`Cannot load optional sample ${url}`)); image.src = url; });
@@ -192,6 +299,9 @@
       assert(start >= 0 && end > start, 'Cannot extract the production scan functions');
       const state = { opencvReady: true, scanner: null, scanMode: 'opencv' };
       scan = new Function('state', 'document', 'window', html.slice(start, end) + '\nreturn { detectDocumentBounds, detectDocumentWithOpenCv, prepareScan };')(state, document, window);
+      const pdfEnd = html.indexOf('    function buildPdfFileName(', end);
+      assert(pdfEnd > end, 'Cannot extract the production PDF functions');
+      pdf = new Function('window', 'yieldToInterface', html.slice(end, pdfEnd) + '\nreturn { preparePdfImage, createLocalPdf };')(window, () => Promise.resolve());
       document.getElementById('status').textContent = 'Running generated-image and worker checks…';
       const options = { documentType: 'document', preferSpread: true, targetLongEdge: 800 };
 
@@ -257,6 +367,12 @@
         return detail;
       });
       await check('Wrinkled-page worker and main-thread scans agree', () => compareWorker(wrinkled, options));
+      await check('Concurrent worker sessions keep request settings and results isolated', () => compareConcurrentSessions(wrinkled));
+
+      const nativeFixture = nativeDetailFixture();
+      displayFixture('Native fine-text and one-pixel color detail', nativeFixture);
+      await check('Native PNG preserves fine text and one-pixel color detail', () => verifyLosslessPng(nativeFixture));
+      await check('PDF embeds the full native image dimensions', () => verifyNativePdf(nativeFixture));
 
       const sample = new URLSearchParams(location.search).get('sample');
       if (sample) {

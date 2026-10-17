@@ -52,19 +52,38 @@ function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+function withScriptLock(callback, flushSpreadsheet) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return callback();
+  } finally {
+    try {
+      if (flushSpreadsheet) SpreadsheetApp.flush();
+    } finally {
+      lock.releaseLock();
+    }
+  }
+}
+
 function ensureSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(HEADER_ROW);
-  }
-  return sheet;
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (sheet && sheet.getLastRow() > 0) return sheet;
+  return withScriptLock(function () {
+    const current = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+    if (!current.getLastRow()) current.appendRow(HEADER_ROW);
+    return current;
+  }, true);
 }
 
 function ensureFolder() {
   const folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME);
-  return folders.hasNext() ? folders.next() : DriveApp.createFolder(DRIVE_FOLDER_NAME);
+  if (folders.hasNext()) return folders.next();
+  return withScriptLock(function () {
+    const current = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME);
+    return current.hasNext() ? current.next() : DriveApp.createFolder(DRIVE_FOLDER_NAME);
+  });
 }
 
 function normalizeValue(value) {
@@ -263,41 +282,40 @@ function updateProcessingStatus(payload) {
   const status = normalizeValue(payload && payload.status);
   const statusColumn = HEADER_ROW.indexOf('Tình trạng xử lý') + 1;
 
-  if (!Number.isInteger(rowIndex) || rowIndex < 2 || rowIndex > sheet.getLastRow()) {
-    throw new Error('Vui lòng chọn hồ sơ cần cập nhật tình trạng xử lý.');
-  }
-  if (status !== 'Đã xử lý' && status !== 'Chưa xử lý') {
-    throw new Error('Tình trạng xử lý không hợp lệ.');
-  }
-
-  sheet.getRange(rowIndex, statusColumn).setValue(status);
-  return { success: true, rowIndex: rowIndex, status: status };
+  return withScriptLock(function () {
+    if (!Number.isInteger(rowIndex) || rowIndex < 2 || rowIndex > sheet.getLastRow()) {
+      throw new Error('Vui lòng chọn hồ sơ cần cập nhật tình trạng xử lý.');
+    }
+    if (status !== 'Đã xử lý' && status !== 'Chưa xử lý') {
+      throw new Error('Tình trạng xử lý không hợp lệ.');
+    }
+    sheet.getRange(rowIndex, statusColumn).setValue(status);
+    return { success: true, rowIndex: rowIndex, status: status };
+  }, true);
 }
 
 function updateRecordNotes(payload) {
   const sheet = ensureSheet();
   const rowIndex = Number(payload && payload.rowIndex ? payload.rowIndex : 0);
-  if (rowIndex < 2 || rowIndex > sheet.getLastRow()) {
-    throw new Error('Vui lòng chọn hồ sơ cần cập nhật ghi chú trước.');
-  }
-
   const notes = normalizeValue(payload && payload.ocrText);
-  sheet.getRange(rowIndex, HEADER_ROW.indexOf('Ghi chú') + 1, 1, 1).setValue(notes);
-  return {
-    success: true,
-    message: 'Đã lưu ghi chú thành công.',
-    rowIndex: rowIndex,
-    ocrText: notes
-  };
+  return withScriptLock(function () {
+    if (rowIndex < 2 || rowIndex > sheet.getLastRow()) {
+      throw new Error('Vui lòng chọn hồ sơ cần cập nhật ghi chú trước.');
+    }
+    sheet.getRange(rowIndex, HEADER_ROW.indexOf('Ghi chú') + 1, 1, 1).setValue(notes);
+    return {
+      success: true,
+      message: 'Đã lưu ghi chú thành công.',
+      rowIndex: rowIndex,
+      ocrText: notes
+    };
+  }, true);
 }
 
 function saveScanRecord(payload) {
   const sheet = ensureSheet();
   const fileName = normalizeValue(payload && payload.fileName ? payload.fileName : `Ho_So_Dat_Dai_${Date.now()}.pdf`);
   const rowIndex = Number(payload && payload.rowIndex ? payload.rowIndex : 0);
-  const isUpdate = rowIndex >= 2 && rowIndex <= sheet.getLastRow();
-  const existingRow = isUpdate ? sheet.getRange(rowIndex, 1, 1, HEADER_ROW.length).getValues()[0] : [];
-  
   const pdfOriginalBase64 = normalizeValue(payload && payload.pdfOriginalBase64);
   const originalFileName = normalizeValue(payload && (payload.fileNameOriginal || payload.originalFileName)) || fileName;
   const requestedPageCount = Number(payload && payload.pageCount ? payload.pageCount : 1);
@@ -306,7 +324,7 @@ function saveScanRecord(payload) {
   const pdfGCNBase64 = normalizeValue(payload && (payload.pdfGCNBase64 || payload.pdfBase64));
   const pdfCCCDBase64 = normalizeValue(payload && payload.pdfCCCDBase64);
   const driveWarnings = [];
-  let originalBackupSaved = false;
+  const uploaded = {};
   let folder = null;
 
   if (pdfOriginalBase64 || pdfGCNBase64 || pdfCCCDBase64) {
@@ -317,43 +335,15 @@ function saveScanRecord(payload) {
     }
   }
 
-  const record = {
-    STT: isUpdate ? existingRow[0] : sheet.getLastRow(),
-    'Tên huyện': normalizeValue(payload && payload.tenHuyen),
-    'Tên xã cũ': normalizeValue(payload && payload.tenXaCu),
-    'Tên xã mới': normalizeValue(payload && payload.tenXaMoi),
-    'Họ Tên CSD': normalizeValue(payload && payload.hoTenCSD),
-    'Số hiệu tờ bản đồ mới': normalizeValue(payload && payload.soHieuToBanDoMoi),
-    'Số thứ tự thửa mới': normalizeValue(payload && payload.soThuTuThuaMoi),
-    'Diện tích': normalizeValue(payload && payload.dienTich),
-    'Loại mục đích sử dụng': normalizeValue(payload && payload.loaiMucDichSuDung),
-    'Số hiệu tờ bản đồ cũ': normalizeValue(payload && payload.soHieuToBanDoCu),
-    'Số thứ tự thửa cũ': normalizeValue(payload && payload.soThuTuThuaCu),
-    'Ấp': normalizeValue(payload && payload.ap),
-    'Thế chấp': normalizeValue(payload && payload.theChap),
-    'File GCN': isUpdate ? normalizeValue(existingRow[13]) : '',
-    'File CCCD': isUpdate ? normalizeValue(existingRow[14]) : '',
-    'Số CCCD': normalizeValue(payload && payload.soCCCD) || (isUpdate ? normalizeValue(existingRow[15]) : ''),
-    'Tình trạng xử lý': isUpdate ? normalizeProcessingStatus(existingRow[23]) : 'Chưa xử lý',
-    fileName: fileName,
-    fileId: isUpdate ? normalizeValue(existingRow[17]) : '',
-    fileUrl: isUpdate ? normalizeValue(existingRow[18]) : '',
-    pageCount: requestedPageCount,
-    createdAt: requestedCreatedAt,
-    source: 'mobile-app'
-  };
-
   const baseName = fileName.replace(/\.pdf$/i, '');
   const cccdFileName = normalizeValue(payload && payload.fileNameCCCD) || `${baseName.replace(/_GCN_\d+$/i, '')}_CCCD_${Date.now()}.pdf`;
 
+  // File uploads are independent for each request and must not hold the sheet lock.
   if (pdfOriginalBase64 && folder) {
     try {
       const saved = savePdfToDrive(folder, pdfOriginalBase64, originalFileName);
       if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      record.fileName = originalFileName;
-      record.fileId = saved.fileId;
-      record.fileUrl = saved.fileUrl;
-      originalBackupSaved = true;
+      uploaded.original = saved;
     } catch (error) {
       driveWarnings.push('Không lưu được PDF bản gốc lên Drive: ' + error.toString());
     }
@@ -363,9 +353,7 @@ function saveScanRecord(payload) {
     try {
       const saved = savePdfToDrive(folder, pdfGCNBase64, fileName);
       if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      record['File GCN'] = saved.fileUrl;
-      if (!pdfOriginalBase64 && !record.fileUrl) record.fileUrl = saved.fileUrl || '';
-      if (!pdfOriginalBase64 && !record.fileId) record.fileId = saved.fileId || '';
+      uploaded.gcn = saved;
     } catch (error) {
       driveWarnings.push('Không lưu được PDF GCN lên Drive: ' + error.toString());
     }
@@ -375,43 +363,69 @@ function saveScanRecord(payload) {
     try {
       const saved = savePdfToDrive(folder, pdfCCCDBase64, cccdFileName);
       if (saved.sharingWarning) driveWarnings.push(saved.sharingWarning);
-      record['File CCCD'] = saved.fileUrl;
-      if (!pdfOriginalBase64 && !record.fileUrl) record.fileUrl = saved.fileUrl || '';
-      if (!pdfOriginalBase64 && !record.fileId) record.fileId = saved.fileId || '';
+      uploaded.cccd = saved;
     } catch (error) {
       driveWarnings.push('Không lưu được PDF CCCD lên Drive: ' + error.toString());
     }
   }
 
-  const row = [
-    record.STT, record['Tên huyện'], record['Tên xã cũ'], record['Tên xã mới'], record['Họ Tên CSD'],
-    record['Số hiệu tờ bản đồ mới'], record['Số thứ tự thửa mới'], record['Diện tích'], record['Loại mục đích sử dụng'],
-    record['Số hiệu tờ bản đồ cũ'], record['Số thứ tự thửa cũ'], record['Ấp'], record['Thế chấp'],
-    record['File GCN'], record['File CCCD'], record['Số CCCD'], record.fileName, record.fileId,
-    record.fileUrl, String(record.pageCount), record.createdAt, record.source,
-    normalizeValue(payload && payload.ocrText) || (isUpdate ? normalizeValue(existingRow[22]) : ''),
-    record['Tình trạng xử lý']
-  ];
-
-  if (isUpdate) {
-    sheet.getRange(rowIndex, 1, 1, HEADER_ROW.length).setValues([row]);
-  } else {
-    sheet.appendRow(row);
-  }
-
-  return {
-    success: true,
-    message: isUpdate ? 'Đã cập nhật hồ sơ.' : 'Đã lưu hồ sơ mới.',
-    warning: driveWarnings.length > 0 ? driveWarnings.join('\n') : undefined,
-    fileUrl: record.fileUrl,
-    fileId: record.fileId,
-    fileGCN: record['File GCN'],
-    fileCCCD: record['File CCCD'],
-    soCCCD: record['Số CCCD'],
-    updated: isUpdate,
-    originalBackupSaved: originalBackupSaved,
-    rowIndex: isUpdate ? rowIndex : sheet.getLastRow()
-  };
+  return withScriptLock(function () {
+    // Another request may have edited this row while Drive was receiving the PDFs.
+    const lastRow = sheet.getLastRow();
+    const isUpdate = rowIndex >= 2 && rowIndex <= lastRow;
+    const existingRow = isUpdate ? sheet.getRange(rowIndex, 1, 1, HEADER_ROW.length).getValues()[0] : [];
+    const savedRowIndex = isUpdate ? rowIndex : lastRow + 1;
+    let fileId = isUpdate ? normalizeValue(existingRow[17]) : '';
+    let fileUrl = isUpdate ? normalizeValue(existingRow[18]) : '';
+    if (uploaded.original) {
+      fileId = uploaded.original.fileId;
+      fileUrl = uploaded.original.fileUrl;
+    } else if (!pdfOriginalBase64) {
+      for (const saved of [uploaded.gcn, uploaded.cccd]) {
+        if (!saved) continue;
+        if (!fileId) fileId = saved.fileId || '';
+        if (!fileUrl) fileUrl = saved.fileUrl || '';
+      }
+    }
+    const fileGCN = uploaded.gcn ? uploaded.gcn.fileUrl : (isUpdate ? normalizeValue(existingRow[13]) : '');
+    const fileCCCD = uploaded.cccd ? uploaded.cccd.fileUrl : (isUpdate ? normalizeValue(existingRow[14]) : '');
+    const soCCCD = normalizeValue(payload && payload.soCCCD) || (isUpdate ? normalizeValue(existingRow[15]) : '');
+    const row = [
+      isUpdate ? existingRow[0] : lastRow,
+      normalizeValue(payload && payload.tenHuyen),
+      normalizeValue(payload && payload.tenXaCu),
+      normalizeValue(payload && payload.tenXaMoi),
+      normalizeValue(payload && payload.hoTenCSD),
+      normalizeValue(payload && payload.soHieuToBanDoMoi),
+      normalizeValue(payload && payload.soThuTuThuaMoi),
+      normalizeValue(payload && payload.dienTich),
+      normalizeValue(payload && payload.loaiMucDichSuDung),
+      normalizeValue(payload && payload.soHieuToBanDoCu),
+      normalizeValue(payload && payload.soThuTuThuaCu),
+      normalizeValue(payload && payload.ap),
+      normalizeValue(payload && payload.theChap),
+      fileGCN, fileCCCD, soCCCD,
+      uploaded.original ? originalFileName : fileName, fileId, fileUrl,
+      String(requestedPageCount), requestedCreatedAt, 'mobile-app',
+      normalizeValue(payload && payload.ocrText) || (isUpdate ? normalizeValue(existingRow[22]) : ''),
+      isUpdate ? normalizeProcessingStatus(existingRow[23]) : 'Chưa xử lý'
+    ];
+    if (isUpdate) sheet.getRange(rowIndex, 1, 1, HEADER_ROW.length).setValues([row]);
+    else sheet.appendRow(row);
+    return {
+      success: true,
+      message: isUpdate ? 'Đã cập nhật hồ sơ.' : 'Đã lưu hồ sơ mới.',
+      warning: driveWarnings.length > 0 ? driveWarnings.join('\n') : undefined,
+      fileUrl: fileUrl,
+      fileId: fileId,
+      fileGCN: fileGCN,
+      fileCCCD: fileCCCD,
+      soCCCD: soCCCD,
+      updated: isUpdate,
+      originalBackupSaved: Boolean(uploaded.original),
+      rowIndex: savedRowIndex
+    };
+  }, true);
 }
 
 function savePdfToDrive(folder, pdfBase64, fileName) {

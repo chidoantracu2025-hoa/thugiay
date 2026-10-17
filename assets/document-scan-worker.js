@@ -12,22 +12,35 @@ const ready = Promise.resolve(self.cv).then(module => {
   if (state.opencvReady && typeof self.jscanify === 'function') state.scanner = new self.jscanify();
   if (!state.opencvReady) throw new Error('OpenCV chưa sẵn sàng');
 });
-self.onmessage = async ({ data }) => {
+// Keep each request's settings stable while OpenCV loads or other scans run.
+let scanQueue = Promise.resolve();
+self.onmessage = ({ data }) => {
+  const request = Object.assign({}, data, { options: Object.assign({}, data.options) });
+  scanQueue = scanQueue.then(() => processScanRequest(request), () => processScanRequest(request));
+};
+async function processScanRequest(data) {
   const { id, bitmap, options, mode } = data;
+  const envelope = { id };
+  if (typeof data.sessionId === 'string') envelope.sessionId = data.sessionId;
+  let bitmapClosed = false;
+  let output = null;
   try {
     await ready;
-    state.scanMode = mode;
+    state.scanMode = ['opencv', 'fallback', 'all'].includes(mode) ? mode : 'opencv';
     const source = new OffscreenCanvas(bitmap.width, bitmap.height);
     source.getContext('2d').drawImage(bitmap, 0, 0);
     bitmap.close();
-    const scan = prepareScan(source, options);
-    const output = scan.canvas.transferToImageBitmap();
-    self.postMessage({ id, bitmap: output, detected: scan.detected, method: scan.method }, [output]);
+    bitmapClosed = true;
+    const scan = prepareScan(source, options, state.scanMode);
+    output = scan.canvas.transferToImageBitmap();
+    self.postMessage(Object.assign({}, envelope, { bitmap: output, detected: scan.detected, method: scan.method }), [output]);
+    output = null;
   } catch (error) {
-    bitmap.close();
-    self.postMessage({ id, error: String(error) });
+    if (!bitmapClosed && bitmap && typeof bitmap.close === 'function') bitmap.close();
+    if (output) output.close();
+    self.postMessage(Object.assign({}, envelope, { error: String(error) }));
   }
-};
+}
     function detectDocumentBounds(sourceCanvas, mode = state.scanMode, options = {}) {
       const candidates = [];
       if (mode !== 'fallback') {
@@ -476,7 +489,7 @@ self.onmessage = async ({ data }) => {
         Math.hypot(corners[1].x - corners[2].x, corners[1].y - corners[2].y),
         Math.hypot(corners[0].x - corners[3].x, corners[0].y - corners[3].y)
       );
-      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge || 3000);
+      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
       const width = output.width;
       const height = output.height;
       const result = state.scanner.extractPaper(sourceCanvas, Math.round(width), Math.round(height), points);
@@ -495,7 +508,7 @@ self.onmessage = async ({ data }) => {
         Math.hypot(topRight.x - bottomRight.x, topRight.y - bottomRight.y),
         Math.hypot(topLeft.x - bottomLeft.x, topLeft.y - bottomLeft.y)
       );
-      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge || 3000);
+      const output = fitScanDimensions(naturalWidth, naturalHeight, maxEdge);
       const warpedCanvas = document.createElement('canvas');
       warpedCanvas.width = output.width;
       warpedCanvas.height = output.height;
@@ -528,43 +541,32 @@ self.onmessage = async ({ data }) => {
     }
 
     function fitScanDimensions(width, height, maxEdge) {
-      const scale = Math.min(1, (maxEdge || 3000) / Math.max(width, height));
+      // Keep native pixels unless a caller explicitly requests a smaller preview.
+      const scale = Number.isFinite(maxEdge) && maxEdge > 0
+        ? Math.min(1, maxEdge / Math.max(width, height)) : 1;
       return {
         width: Math.max(1, Math.round(width * scale)),
         height: Math.max(1, Math.round(height * scale))
       };
     }
 
-    function prepareScan(sourceCanvas, opts) {
-      const bounds = detectDocumentBounds(sourceCanvas, state.scanMode, opts);
-      const cropCanvas = document.createElement('canvas');
-      let cropCtx;
+    function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
+      const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
+      let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
-        const corrected = bounds.method === 'jscanify'
+        target = bounds.method === 'jscanify'
           ? extractDocumentWithJscanify(sourceCanvas, bounds.corners, opts.targetLongEdge)
           : warpDocumentPerspective(sourceCanvas, bounds.corners, opts.targetLongEdge);
-        cropCanvas.width = corrected.width;
-        cropCanvas.height = corrected.height;
-        cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-        cropCtx.drawImage(corrected, 0, 0);
       } else {
-        cropCanvas.width = bounds.width;
-        cropCanvas.height = bounds.height;
-        cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-        cropCtx.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
+        const output = fitScanDimensions(bounds.width, bounds.height, opts.targetLongEdge);
+        target = document.createElement('canvas');
+        target.width = output.width;
+        target.height = output.height;
+        const context = target.getContext('2d', { willReadFrequently: true });
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(sourceCanvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, target.width, target.height);
       }
-
-      const target = document.createElement('canvas');
-      const targetLongEdge = Math.min(opts.targetLongEdge || 3000, Math.max(cropCanvas.width, cropCanvas.height));
-      const ratio = cropCanvas.width / cropCanvas.height;
-      target.width = ratio >= 1 ? targetLongEdge : Math.max(1, Math.round(targetLongEdge * ratio));
-      target.height = ratio >= 1 ? Math.max(1, Math.round(targetLongEdge / ratio)) : targetLongEdge;
-      const targetCtx = target.getContext('2d');
-      targetCtx.drawImage(cropCanvas, 0, 0, target.width, target.height);
-      if (state.opencvReady) {
-        correctDocumentLighting(target);
-      }
-
+      if (state.opencvReady) correctDocumentLighting(target);
       return { canvas: target, detected: bounds.detected, method: bounds.method };
     }
 

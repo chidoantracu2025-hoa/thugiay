@@ -11,6 +11,13 @@ for camera and Worker support; opening a file directly is not the supported setu
 - OCR: Tesseract.js 5.1.1, Tesseract.js-core 5.1.1 and local English data.
 - Scanning: `document-scan-worker.js` uses the repository's OpenCV/jscanify.
   Browsers without OffscreenCanvas use the main-thread compatibility path.
+- Sessions: `scan-session.js` creates a distinct session and dedicated scan/QR
+  Workers for each page instance. Each client queues its own requests, captures
+  detection settings per image, and rejects replies with another session or
+  request ID. OCR has its own queue per page instance. Settings use page-specific
+  `sessionStorage` with an in-memory fallback, so changing one tab's mode or API
+  URL does not change another tab's recognition settings. Existing saved settings
+  are read once for migration. Scan images remain in the current tab's memory.
 - Additional A4/A3 detection: `a4-document-detector.js` is shared by all six
   pages and the scan Worker. It finds light paper regions at adaptive thresholds,
   closes small crease shadows and fits four enclosing corners to an uneven
@@ -22,13 +29,24 @@ for camera and Worker support; opening a file directly is not the supported setu
 - Dependencies are stored locally; no external recognition API is called.
   Existing Drive/Sheet saving still uploads the resulting PDF and record to Google.
 
-PDF images are downsampled to at most 200 pixels per printed inch, based on
-actual placement dimensions. Low-resolution originals are never enlarged.
-A3 orientation follows the image; cards fit inside 85.6 x 53.98 mm (swapped
-for portrait) on A4. JPEG quality starts at 0.84. The combined backup tries
-0.76 and 0.68 if necessary to stay below 3 MB, then asks for fewer pages
-rather than silently reducing resolution further. This backup contains
-images before geometric correction, but is resized and JPEG-compressed.
+Scan output and PDF images retain the native source/crop resolution. PDF images
+use lossless PNG; jsPDF's FAST compression only changes PNG/deflate compression,
+not pixel quality. There is no application file-size cap, 200 dpi downsampling
+or repeated JPEG recompression. The combined backup uses images before geometric
+and lighting correction at their original pixel dimensions. A3 orientation follows
+the image; cards still fit inside 85.6 x 53.98 mm (swapped for portrait) on A4.
+Thumbnail previews remain smaller JPEGs and are never used to generate PDFs.
+Camera capture requests the maximum available still-photo dimensions and uses
+the native video frame if still capture is unavailable. Detection analysis and
+lighting estimation use small probes without resizing the final saved image.
+Readability still depends on source focus, lighting and resolution; device memory
+and Google service limits still apply to very large files.
+
+`code.gs` uploads files independently, then uses a short script lock to read the
+latest row, allocate its STT, write it, and return the exact saved row index.
+Status/note edits use the same lock; Drive uploads do not hold it. Deploy the
+updated Apps Script as well as all six HTML pages and the `assets/` directory
+to activate both the browser and server concurrency improvements.
 
 QR parsing accepts a pipe-separated CCCD payload with a twelve-digit first
 field and a nonempty name field; it does not treat URLs or arbitrary digit
@@ -42,7 +60,8 @@ https://github.com/naptha/tesseract.js
 https://github.com/naptha/tesseract.js-core
 English language data: https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz
 
-Validation: `node tests/land-scan.test.js` from the repository root.
+Validation from the repository root: `node tests/land-scan.test.js`,
+`node tests/scan-session.test.js` and `node tests/server-concurrency.test.js`.
 For image detection, serve the repository with `python3 -m http.server 8765`
 and open `http://localhost:8765/tests/document-detection.html`. The browser
 harness checks generated flat, wrinkled, skewed and rotated sheets, background
