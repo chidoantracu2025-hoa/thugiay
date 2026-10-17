@@ -2225,7 +2225,7 @@
         const multipart = [originalParts, gcnParts, cccdParts].some(parts => parts.length > 1);
         if (multipart) {
           const capabilities = await apiRequest('PING', {}, requestUrl);
-          if (capabilities.supportsPdfParts !== true || capabilities.pdfUploadVersion < 2) {
+          if (capabilities.supportsPdfParts !== true || !(capabilities.pdfUploadVersion >= 2)) {
             throw new Error('Web App chưa hỗ trợ PDF chia phần. Vui lòng triển khai phiên bản code.gs mới rồi lưu lại; ảnh vẫn được giữ trên trang.');
           }
         }
