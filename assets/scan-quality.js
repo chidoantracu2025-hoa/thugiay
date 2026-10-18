@@ -4,6 +4,11 @@
 
   const DEFAULT_DPI = 400;
   const MIN_REVIEW_DPI = 240;
+  const QUALITY_THRESHOLDS = Object.freeze({
+    document: Object.freeze({ rejectDpi: 200, seriousDpi: 240, reviewDpi: 300 }),
+    card: Object.freeze({ rejectDpi: 250, seriousDpi: 300, reviewDpi: 350 }),
+    focus: Object.freeze({ failRatio: 0.34, reviewRatio: 0.52, minTexturedRegions: 2 })
+  });
 
   function releaseCanvas(canvas) {
     if (!canvas) return;
@@ -75,6 +80,125 @@
       dpi, effectiveDpi, pixelWidth, pixelHeight, sourceWidth: natural.width, sourceHeight: natural.height,
       limited: scale < 1, optimized, quality: { lowResolution, warnings, detailAssessment: 'unverified',
         dpiSelection: Number(options.dpi) === 300 ? 'explicit' : verified ? 'verified-text-sampling' : 'safety' } };
+  }
+
+  function dpiStatus(effectiveDpi, documentType) {
+    if (!Number.isFinite(effectiveDpi) || effectiveDpi <= 0) return 'unknown';
+    const limits = /^cccd/.test(String(documentType || '')) ? QUALITY_THRESHOLDS.card : QUALITY_THRESHOLDS.document;
+    if (effectiveDpi < limits.rejectDpi) return 'fail';
+    if (effectiveDpi < limits.seriousDpi) return 'serious';
+    if (effectiveDpi < limits.reviewDpi) return 'review';
+    return 'pass';
+  }
+
+  function sourceResolution(source, bounds, options) {
+    options = options || {};
+    if (!bounds || !bounds.detected) return { sourceWidth: source.width || 0, sourceHeight: source.height || 0,
+      effectiveDpi: null, status: 'unknown', upscaled: false };
+    const natural = naturalDimensions(source, bounds);
+    const card = /^cccd/.test(String(options.documentType || ''));
+    const landscape = natural.width >= natural.height;
+    const longMm = card ? 85.6 : options.documentFormat === 'a4' ? 297 : 420;
+    const shortMm = card ? 53.98 : options.documentFormat === 'a4' ? 210 : 297;
+    const widthMm = landscape ? longMm : shortMm;
+    const heightMm = landscape ? shortMm : longMm;
+    const effectiveDpi = Math.min(natural.width / (widthMm / 25.4), natural.height / (heightMm / 25.4));
+    return { sourceWidth: Math.round(natural.width), sourceHeight: Math.round(natural.height),
+      effectiveDpi, status: dpiStatus(effectiveDpi, options.documentType), upscaled: false };
+  }
+
+  function regionFocus(pixels, width, height, left, top, right, bottom) {
+    let lapSum = 0, lapSquared = 0, edges = 0, samples = 0, graySum = 0, graySquared = 0;
+    const grayAt = function (x, y) {
+      const i = (y * width + x) * 4;
+      return (pixels[i] * 77 + pixels[i + 1] * 150 + pixels[i + 2] * 29) >> 8;
+    };
+    const step = Math.max(1, Math.floor(Math.min(right - left, bottom - top) / 180));
+    for (let y = top + step; y < bottom - step; y += step) {
+      for (let x = left + step; x < right - step; x += step) {
+        const center = grayAt(x, y);
+        const gx = grayAt(x + step, y) - grayAt(x - step, y);
+        const gy = grayAt(x, y + step) - grayAt(x, y - step);
+        const lap = grayAt(x - step, y) + grayAt(x + step, y) + grayAt(x, y - step) + grayAt(x, y + step) - center * 4;
+        lapSum += lap; lapSquared += lap * lap;
+        if (gx * gx + gy * gy > 900) edges++;
+        graySum += center; graySquared += center * center; samples++;
+      }
+    }
+    if (!samples) return { textured: false, laplacian: 0, edgeDensity: 0, contrast: 0, score: 0 };
+    const laplacian = Math.max(0, lapSquared / samples - Math.pow(lapSum / samples, 2));
+    const contrast = Math.sqrt(Math.max(0, graySquared / samples - Math.pow(graySum / samples, 2)));
+    const edgeDensity = edges / samples;
+    const textured = contrast >= 12 || edgeDensity >= .018;
+    // Normalize several weak signals. This is deliberately relative across regions below;
+    // a single sensor-specific Laplacian threshold is not treated as proof of sharpness.
+    const score = Math.log1p(laplacian) * (0.55 + Math.min(.45, edgeDensity * 5)) * Math.min(1, contrast / 24);
+    return { textured, laplacian, edgeDensity, contrast, score };
+  }
+
+  function focusAssessmentFromPixels(pixels, width, height, strict) {
+    if (!pixels || pixels.length < width * height * 4 || width < 40 || height < 40) {
+      return { score: null, status: 'unknown', confidence: 0, regions: [] };
+    }
+    const boxes = [[.18,.18,.48,.48],[.52,.18,.82,.48],[.18,.52,.48,.82],[.52,.52,.82,.82],[.32,.32,.68,.68]];
+    if (strict) boxes.push([.08,.35,.32,.65],[.68,.35,.92,.65],[.35,.08,.65,.32],[.35,.68,.65,.92]);
+    const regions = boxes.map(function (box) { return regionFocus(pixels, width, height,
+      Math.floor(width * box[0]), Math.floor(height * box[1]), Math.ceil(width * box[2]), Math.ceil(height * box[3])); });
+    const textured = regions.filter(function (region) { return region.textured; });
+    if (textured.length < QUALITY_THRESHOLDS.focus.minTexturedRegions) {
+      const sparseScore = textured.length ? textured[0].score : null;
+      // A blank page remains uncertain. A page with measurable edges whose only textured
+      // region is very soft is useful evidence of blur, though confidence stays moderate.
+      return { score: sparseScore, status: sparseScore !== null && sparseScore < 1.35 ? 'fail' : 'uncertain',
+        confidence: sparseScore !== null && sparseScore < 1.35 ? .45 : .25, regions };
+    }
+    const scores = textured.map(function (region) { return region.score; }).sort(function (a, b) { return a - b; });
+    const median = scores[Math.floor(scores.length / 2)] || 0;
+    const clear = textured.filter(function (region) { return region.score >= Math.max(1.25, median * .58); }).length;
+    const ratio = clear / textured.length;
+    const status = median < 1.35 || ratio < QUALITY_THRESHOLDS.focus.failRatio ? 'fail'
+      : median < 1.8 || ratio < QUALITY_THRESHOLDS.focus.reviewRatio ? 'review' : 'pass';
+    return { score: median, status, confidence: Math.min(.95, .45 + textured.length / boxes.length * .5), regions };
+  }
+
+  function assessQuality(canvas, bounds, options) {
+    options = options || {};
+    const resolution = sourceResolution(canvas, bounds, options);
+    let probe;
+    try {
+      const natural = naturalDimensions(canvas, bounds);
+      const scale = Math.min(1, (options.qualityMode === 'quality' ? 720 : 560) / Math.max(natural.width, natural.height));
+      probe = newCanvas(natural.width * scale, natural.height * scale);
+      const context = probe.getContext('2d', { willReadFrequently: true });
+      const x = bounds && Number.isFinite(bounds.x) ? bounds.x : 0;
+      const y = bounds && Number.isFinite(bounds.y) ? bounds.y : 0;
+      context.drawImage(canvas, x, y, bounds && bounds.width || canvas.width, bounds && bounds.height || canvas.height,
+        0, 0, probe.width, probe.height);
+      const data = context.getImageData(0, 0, probe.width, probe.height).data;
+      const focus = focusAssessmentFromPixels(data, probe.width, probe.height, options.qualityMode === 'quality');
+      const light = lightingProfileFromPixels(data, probe.width, probe.height);
+      const lighting = { status: light.dark ? 'dark' : light.possibleGlare ? 'review' : light.unevenness > 35 ? 'review' : 'pass',
+        dark: Boolean(light.dark), possibleGlare: Boolean(light.possibleGlare), clippedFraction: light.clippedFraction || 0,
+        unevenness: light.unevenness || 0 };
+      const reasons = [];
+      if (resolution.status === 'unknown') reasons.push('Không xác định chắc chắn được khổ hoặc mép giấy nên chưa thể tính DPI thực.');
+      else if (resolution.status === 'fail') reasons.push('DPI nguồn dưới 200; chữ nhỏ có nguy cơ không đọc được.');
+      else if (resolution.status === 'serious') reasons.push('DPI nguồn dưới 240; nên chụp lại bằng ảnh tĩnh hoặc camera hệ thống.');
+      else if (resolution.status === 'review') reasons.push('DPI nguồn dưới 300; cần xem rõ chữ nhỏ trước khi lưu.');
+      if (focus.status === 'fail') reasons.push('Nhiều vùng có chi tiết bị mất nét hoặc nhòe.');
+      else if (focus.status === 'review') reasons.push('Độ nét chưa đồng đều; hãy kiểm tra chữ nhỏ và các góc giấy.');
+      else if (focus.status === 'uncertain') reasons.push('Trang có ít chi tiết để đo độ nét; cần kiểm tra thủ công.');
+      if (lighting.status === 'dark') reasons.push('Ảnh thiếu sáng.');
+      else if (lighting.status === 'review') reasons.push(light.possibleGlare ? 'Có vùng sáng mạnh có thể che chữ.' : 'Ánh sáng không đều.');
+      const fail = resolution.status === 'fail' || focus.status === 'fail';
+      const review = fail || resolution.status !== 'pass' || focus.status !== 'pass' || lighting.status !== 'pass';
+      return { resolution, focus, lighting, overall: { status: fail ? 'fail' : review ? 'review' : 'pass', reasons },
+        source: options.captureSource || 'unknown' };
+    } catch (error) {
+      return { resolution, focus: { score: null, status: 'unknown', confidence: 0 }, lighting: { status: 'unknown' },
+        overall: { status: 'review', reasons: ['Không hoàn tất được phép đo chất lượng; cần kiểm tra ảnh thủ công.'] },
+        source: options.captureSource || 'unknown' };
+    } finally { releaseCanvas(probe); }
   }
 
   function percentile(histogram, count, fraction) {
@@ -235,6 +359,7 @@
     }
   }
 
-  root.ScanQuality = { DEFAULT_DPI, MIN_REVIEW_DPI, outputPolicy, naturalDimensions,
+  root.ScanQuality = { DEFAULT_DPI, MIN_REVIEW_DPI, QUALITY_THRESHOLDS, outputPolicy, naturalDimensions,
+    dpiStatus, sourceResolution, focusAssessmentFromPixels, assessQuality,
     lightingProfile, lightingProfileFromPixels, gainLookup, correctLighting, warpPerspective, releaseCanvas };
 })(typeof window !== 'undefined' ? window : self);

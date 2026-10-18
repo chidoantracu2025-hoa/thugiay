@@ -409,6 +409,11 @@
           </select>
           <div class="helper">Ảnh thiếu nét hoặc chói cần chụp lại. Ứng dụng giữ màu dấu và không phóng lớn ảnh để giả tăng độ phân giải.</div>
         </div>
+        <div class="field mt-8">
+          <label for="captureProfile">Chế độ kiểm tra ảnh</label>
+          <select id="captureProfile" onchange="setCaptureProfile(this.value)"><option value="fast">Nhanh — mặc định</option><option value="quality">Ưu tiên chất lượng — kiểm tra nhiều vùng chữ</option></select>
+          <div class="helper">Chế độ chỉ áp dụng cho ảnh chụp tiếp theo. Cả hai chế độ đều kiểm tra DPI nguồn và độ nét; chế độ chất lượng lấy mẫu nhiều vùng hơn.</div>
+        </div>
         <div class="camera-actions mt-8">
           <button class="primary" id="btnStartCamera" type="button" onclick="startCamera()">Bật camera</button>
           <button class="secondary" id="btnCapturePage" type="button" onclick="capturePage('document')" disabled>Chụp trang giấy tờ</button>
@@ -428,9 +433,9 @@
             <option value="cccd-back">CCCD mặt sau</option>
           </select>
           <button class="secondary" type="button" onclick="document.getElementById('nativeCameraFile').click()">Chụp bằng camera hệ thống</button>
-          <input id="nativeCameraFile" type="file" accept="image/*" capture="environment" hidden onchange="processImageFiles(this.files)" />
+          <input id="nativeCameraFile" type="file" accept="image/*" capture="environment" hidden onchange="processImageFiles(this.files, 'system-camera')" />
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
-          <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files)" />
+          <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files, 'upload')" />
           <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. Ảnh GCN ưu tiên khổ A3 và độ rõ chữ, xử lý tối đa 400 dpi; PDF tối đa 10 MB mỗi file. Camera tự nghỉ sau chụp và khi lưu. Hồ sơ lớn tự chia theo trang, lưu các phần trong cùng thư mục. Nên dùng camera hệ thống nếu trình duyệt chụp thiếu nét.</div>
         </div>
 
@@ -545,7 +550,7 @@
 
         <div class="footer-actions mt-8">
           <button class="secondary" type="button" onclick="clearForm()">Xóa form</button>
-          <button class="success" id="btnSaveRecord" type="button" onclick="saveCurrentRecord()">Lưu PDF GCN + CCCD</button>
+          <button class="success" id="btnSaveRecord" type="button" onclick="saveCurrentRecord()">Lưu hồ sơ</button>
         </div>
       </div>
     </div>
@@ -560,7 +565,7 @@
     const scanSessionId = ScanSession.createId();
     const SCAN_PAGE_ID = 'TraCu';
     const PAGE_STORAGE_PREFIX = 'landScan:' + SCAN_PAGE_ID + ':';
-    const PAGE_STORAGE_KEYS = { apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl', scanMode: PAGE_STORAGE_PREFIX + 'scanMode', qualityDpi: PAGE_STORAGE_PREFIX + 'qualityDpi' };
+    const PAGE_STORAGE_KEYS = { apiUrl: PAGE_STORAGE_PREFIX + 'apiUrl', scanMode: PAGE_STORAGE_PREFIX + 'scanMode', qualityDpi: PAGE_STORAGE_PREFIX + 'qualityDpi', captureProfile: PAGE_STORAGE_PREFIX + 'captureProfile' };
     const pageSettings = new Map();
     let scanGeneration = 0;
     let scanSequence = 0;
@@ -589,6 +594,7 @@
       cameraWanted: false,
       cameraOpenGeneration: 0,
       qualityDpi: Number(readPageSetting('qualityDpi')) === 300 ? 300 : 400,
+      captureProfile: readPageSetting('captureProfile') === 'quality' ? 'quality' : 'fast',
       cameraIdleTimer: 0,
       pdfCache: [],
       saveAttempt: null,
@@ -667,7 +673,7 @@
             if (!context) throw new Error('Thiết bị không đủ bộ nhớ để giữ ảnh.');
             context.drawImage(result.bitmap, 0, 0);
             return { canvas, detected: result.detected, method: result.method, quality: result.quality,
-              dpi: result.dpi, effectiveDpi: result.effectiveDpi, lighting: result.lighting };
+              dpi: result.dpi, effectiveDpi: result.effectiveDpi, lighting: result.lighting, timings: result.timings };
           } finally { result.bitmap.close(); }
         }
         // Do not repeat a failed full OpenCV job on the UI thread of an already busy phone.
@@ -725,11 +731,18 @@
     document.getElementById('scanMode').value = ['opencv', 'fallback', 'all'].includes(state.scanMode) ? state.scanMode : 'opencv';
 
     document.getElementById('qualityDpi').value = String(state.qualityDpi);
+    document.getElementById('captureProfile').value = state.captureProfile;
 
     function setQualityDpi(value) {
       state.qualityDpi = Number(value) === 300 ? 300 : 400;
       writePageSetting('qualityDpi', String(state.qualityDpi));
       setStatus('Mức chi tiết áp dụng cho ảnh chụp hoặc tải lên tiếp theo. Hãy kiểm tra chữ nhỏ sau khi xử lý.', 'normal');
+    }
+
+    function setCaptureProfile(value) {
+      state.captureProfile = value === 'quality' ? 'quality' : 'fast';
+      writePageSetting('captureProfile', state.captureProfile);
+      setStatus('Chế độ kiểm tra mới áp dụng cho ảnh chụp hoặc tải lên tiếp theo.', 'normal');
     }
 
     function setScanMode(mode) {
@@ -886,7 +899,7 @@
       state.selectedRowIndex = Number(item.rowIndex) || null;
       document.getElementById('btnSaveRecord').textContent = state.selectedRowIndex
         ? 'Cập nhật dòng đã chọn'
-        : 'Lưu PDF GCN + CCCD';
+        : 'Lưu hồ sơ';
       setStatus(state.selectedRowIndex ? `Đang sửa dòng ${state.selectedRowIndex}` : 'Đã tải hồ sơ', 'success');
       document.getElementById('btnSaveRecord').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -897,6 +910,7 @@
         return;
       }
       if (state.stream || document.hidden || state.saving) return;
+      const cameraStart = performance.now();
       const openGeneration = ++state.cameraOpenGeneration;
       const currentOpen = () => openGeneration === state.cameraOpenGeneration && !document.hidden && !state.saving;
 
@@ -974,6 +988,7 @@
 
         armCameraIdle();
         scanCameraPreview();
+        state.lastCameraStartMs = performance.now() - cameraStart;
         setStatus('Camera sẵn sàng. Sau khi chụp, camera sẽ nghỉ để giảm nóng máy.', 'success');
       } catch (error) {
         if (!currentOpen()) { releaseOpened(ownedStream); return; }
@@ -1045,15 +1060,34 @@
       });
     }
 
+    function cameraPromise(promise, timeoutMs, message) {
+      let timer;
+      return Promise.race([Promise.resolve(promise), new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })]).finally(() => clearTimeout(timer));
+    }
+
     async function raiseFallbackCaptureResolution(track, video) {
-      if (!track || !track.applyConstraints) return;
+      if (!track) return { width: video.videoWidth || 0, height: video.videoHeight || 0 };
+      const beforeWidth = video.videoWidth || 0, beforeHeight = video.videoHeight || 0;
       try {
-        await track.applyConstraints({ width: { ideal: 4096 }, height: { ideal: 3072 }, frameRate: { ideal: 5, max: 10 } });
+        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+        const requestedWidth = capabilities.width && capabilities.width.max ? Math.min(4096, capabilities.width.max) : 4096;
+        const requestedHeight = capabilities.height && capabilities.height.max ? Math.min(3072, capabilities.height.max) : 3072;
+        if (track.applyConstraints) await cameraPromise(track.applyConstraints({ width: { ideal: requestedWidth }, height: { ideal: requestedHeight }, frameRate: { ideal: 5, max: 10 } }),
+          3000, 'Camera không chuyển được sang độ phân giải chụp cao.');
         await new Promise(resolve => {
-          const timer = setTimeout(resolve, 350);
-          if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(); });
+          const started = performance.now();
+          const check = () => {
+            if ((video.videoWidth && video.videoHeight && (video.videoWidth !== beforeWidth || video.videoHeight !== beforeHeight)) || performance.now() - started >= 900) resolve();
+            else setTimeout(check, 60);
+          };
+          if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(check);
+          else check();
         });
       } catch (_) { /* Keep the best video frame that this device actually supplies. */ }
+      const settings = track.getSettings ? track.getSettings() : {};
+      return { width: video.videoWidth || settings.width || 0, height: video.videoHeight || settings.height || 0 };
     }
 
     async function refreshCameras(activeDeviceId) {
@@ -1103,6 +1137,9 @@
       let sourceCanvas = null;
       let photoBitmap = null;
       let keptItem = null;
+      const captureStarted = performance.now();
+      let captureSource = 'video-fallback';
+      let captureFinished = captureStarted;
       try {
         if (!state.stream && state.cameraWanted) await startCamera();
         const video = document.getElementById('video');
@@ -1117,11 +1154,14 @@
           try {
             const camera = new ImageCapture(track);
             try {
-              const capabilities = camera.getPhotoCapabilities ? await camera.getPhotoCapabilities() : {};
-              originalBlob = await camera.takePhoto(window.ScanRuntime.choosePhotoSettings(capabilities, captureType, captureDpi));
-            } catch (_) { originalBlob = await camera.takePhoto(); }
+              const capabilities = camera.getPhotoCapabilities
+                ? await cameraPromise(camera.getPhotoCapabilities(), 3000, 'Không đọc được khả năng ảnh tĩnh.') : {};
+              const settings = window.ScanRuntime.choosePhotoSettings(capabilities, captureType, captureDpi, state.captureProfile);
+              originalBlob = await cameraPromise(camera.takePhoto(settings), 12000, 'Camera chụp ảnh tĩnh quá lâu.');
+            } catch (_) { originalBlob = await cameraPromise(camera.takePhoto(), 12000, 'Camera chụp ảnh tĩnh quá lâu.'); }
             stopCamera('', true);
             photoBitmap = await decodeImageFile(originalBlob);
+            captureSource = 'still-photo';
           } catch (error) {
             if (originalBlob) throw new Error('Chưa đọc được ảnh vừa chụp. Vui lòng thử camera hệ thống; ảnh không bị thay bằng khung hình thiếu nét.');
             console.info('Ảnh tĩnh chưa khả dụng; thử khung video rõ nhất.', error);
@@ -1137,16 +1177,23 @@
           if (!sourceCanvas.width || !sourceCanvas.height) throw new Error('Chưa lấy được ảnh. Hãy thử camera hệ thống hoặc chụp lại.');
           sourceCanvas.getContext('2d').drawImage(video, 0, 0, sourceCanvas.width, sourceCanvas.height);
         }
+        captureFinished = performance.now();
         stopCamera('', true);
         setStatus('Camera đang nghỉ; đang căn chỉnh và kiểm tra ảnh...', 'normal');
-        const scan = await prepareScanAsync(sourceCanvas, { documentType: captureType, preferSpread: captureType === 'document', dpi: captureDpi });
+        const processingStarted = performance.now();
+        const scan = await prepareScanAsync(sourceCanvas, { documentType: captureType, preferSpread: captureType === 'document',
+          dpi: captureDpi, qualityMode: state.captureProfile, captureSource });
         if (generation !== scanGeneration) { window.ScanRuntime.releaseCanvas(scan.canvas); return; }
         const item = {
           id: state.pendingRetakeId || createScanId(), type: captureType, canvas: scan.canvas,
           fileName: captureType === 'document' ? 'Ảnh chụp' : (captureType === 'cccd-front' ? 'CCCD mặt trước' : 'CCCD mặt sau'),
           detected: scan.detected, method: scan.method,
           processingQuality: { ...(scan.quality || {}), dpi: scan.dpi || 400, effectiveDpi: scan.effectiveDpi },
-          lighting: scan.lighting
+          lighting: scan.lighting, captureSource,
+          performance: { cameraStartMs: state.lastCameraStartMs || null, captureMs: captureFinished - captureStarted, qualityAndProcessingMs: performance.now() - processingStarted,
+            qualityCheckMs: scan.timings && scan.timings.qualityCheckMs,
+            documentProcessingMs: scan.timings && scan.timings.documentProcessingMs,
+            totalCaptureToReadyMs: performance.now() - captureStarted }
         };
         await window.ScanRuntime.storeOriginal(item, sourceCanvas, originalBlob);
         if (generation !== scanGeneration) { window.ScanRuntime.disposeItem(item); return; }
@@ -1305,7 +1352,7 @@
       if (preview) preview.innerHTML = renderFileBadges(item);
     }
 
-    async function processImageFiles(fileList) {
+    async function processImageFiles(fileList, inputSource = 'upload') {
       if (state.processing || state.saving) return;
       state.processing = true;
       if (state.stream || state.cameraWanted) stopCamera('', true);
@@ -1326,11 +1373,18 @@
             if (generation !== scanGeneration) break;
             const pending = state.pendingRetakeId ? [...state.documentPages, ...state.cccdPhotos].find(item => item.id === state.pendingRetakeId) : null;
             const itemType = pending ? pending.type : uploadType;
-            const scan = await prepareScanAsync(sourceCanvas, { documentType: itemType, preferSpread: itemType === 'document', dpi: importDpi });
+            const processingStarted = performance.now();
+            const captureSource = inputSource === 'system-camera' ? 'system-camera' : 'upload';
+            const scan = await prepareScanAsync(sourceCanvas, { documentType: itemType, preferSpread: itemType === 'document',
+              dpi: importDpi, qualityMode: state.captureProfile, captureSource });
             if (generation !== scanGeneration) { window.ScanRuntime.releaseCanvas(scan.canvas); break; }
             const item = { id: state.pendingRetakeId || createScanId(), type: itemType, canvas: scan.canvas,
               fileName: file.name, detected: scan.detected, method: scan.method,
-              processingQuality: { ...(scan.quality || {}), dpi: scan.dpi || 400, effectiveDpi: scan.effectiveDpi }, lighting: scan.lighting };
+              processingQuality: { ...(scan.quality || {}), dpi: scan.dpi || 400, effectiveDpi: scan.effectiveDpi }, lighting: scan.lighting,
+              captureSource, performance: { captureMs: 0, qualityAndProcessingMs: performance.now() - processingStarted,
+                qualityCheckMs: scan.timings && scan.timings.qualityCheckMs,
+                documentProcessingMs: scan.timings && scan.timings.documentProcessingMs,
+                totalCaptureToReadyMs: performance.now() - processingStarted } };
             await window.ScanRuntime.storeOriginal(item, sourceCanvas, file);
             if (generation !== scanGeneration) { window.ScanRuntime.disposeItem(item); break; }
             keptItem = item;
@@ -1512,6 +1566,16 @@
       const processedUrl = item.processedPreviewUrl || createScanPreviewUrl(item.canvas);
       const quality = item.processingQuality || {};
       const qualityText = (quality.warnings || []).join(' ');
+      const report = quality.report || {};
+      const resolution = report.resolution || {};
+      const focus = report.focus || {};
+      const overall = report.overall || { status: 'review', reasons: ['Chưa có kết quả kiểm tra chất lượng.'] };
+      const needsDecision = overall.status !== 'pass' && !item.qualityAccepted;
+      const sourceLabels = { 'still-photo': 'Ảnh tĩnh', 'video-fallback': 'Video camera', 'system-camera': 'Camera hệ thống', upload: 'Ảnh tải lên' };
+      const focusLabels = { pass: 'Đạt', review: 'Cần kiểm tra', fail: 'Mất nét/nhòe', uncertain: 'Chưa đủ bằng chứng', unknown: 'Không xác định' };
+      const overallLabels = { pass: 'Đạt', review: 'Cần kiểm tra', fail: 'Không đạt' };
+      const dpiText = Number.isFinite(resolution.effectiveDpi) ? `${Math.round(resolution.effectiveDpi)} dpi` : 'Không xác định';
+      const resolutionText = resolution.sourceWidth && resolution.sourceHeight ? `${resolution.sourceWidth} × ${resolution.sourceHeight} px` : 'Không xác định';
       const collection = getScanCollection(item.type);
       const slot = collection.findIndex(scan => scan.id === item.id) + 1;
       const label = item.type === 'document'
@@ -1526,10 +1590,13 @@
           <figure><img src="${originalUrl}" alt="Ảnh gốc: ${escapeHtml(item.fileName)}" /><figcaption>Ảnh gốc</figcaption></figure>
           <figure><img src="${processedUrl}" alt="Ảnh đã căn chỉnh: ${escapeHtml(item.fileName)}" /><figcaption>Kết quả căn chỉnh và cân sáng (${escapeHtml(item.method || 'fallback')})</figcaption></figure>
         </div>
+        <div class="helper"><strong>Chất lượng: ${escapeHtml(overallLabels[overall.status] || 'Cần kiểm tra')}</strong> · Nguồn: ${escapeHtml(sourceLabels[report.source || item.captureSource] || 'Không xác định')} · Độ phân giải vùng giấy: ${escapeHtml(resolutionText)} · DPI nguồn: ${escapeHtml(dpiText)} · Độ nét: ${escapeHtml(focusLabels[focus.status] || 'Không xác định')}</div>
+        ${(overall.reasons || []).length ? `<div class="helper" style="color:${overall.status === 'fail' ? '#b91c1c' : '#92400e'}">${escapeHtml(overall.reasons.join(' '))}</div>` : ''}
         ${qualityText ? `<div class="helper">${escapeHtml(qualityText)}</div>` : ''}
         <div class="thumb-tools">
           <button type="button" class="secondary" onclick="reviewScan('${item.id}')">Xem rõ chữ</button>
           <button type="button" class="secondary" onclick="retakeScan('${item.id}')">Chụp lại</button>
+          ${needsDecision ? `<button type="button" class="warning" onclick="acceptScanQuality('${item.id}')">Giữ ảnh (xác nhận ngoại lệ)</button>` : ''}
           <button type="button" class="secondary" onclick="replaceScanFromFile('${item.id}')">Chọn ảnh khác</button>
           <button type="button" class="delete-scan" onclick="deleteScan('${item.id}')">Xóa ảnh</button>
         </div>
@@ -1538,6 +1605,18 @@
       const existing = list.querySelector(`[data-scan-id="${item.id}"]`);
       if (existing) existing.replaceWith(holder);
       else list.appendChild(holder);
+    }
+
+    function acceptScanQuality(scanId) {
+      if (state.processing || state.saving) return;
+      const item = [...state.documentPages, ...state.cccdPhotos].find(scan => scan.id === scanId);
+      if (!item) return;
+      item.qualityAccepted = true;
+      item.revision = (item.revision || 1) + 1;
+      state.pdfCache = [];
+      state.saveAttempt = null;
+      renderScanItem(item);
+      setStatus('Đã giữ ảnh theo xác nhận của người dùng. Ảnh gốc vẫn được bảo toàn.', 'normal');
     }
 
     function createScanPreviewUrl(sourceCanvas) {
@@ -2095,8 +2174,13 @@
     }
 
     function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
+      const now = () => typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      const started = now();
       const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
       const policy = window.ScanQuality.outputPolicy(sourceCanvas, bounds, opts);
+      const qualityStarted = now();
+      const qualityReport = window.ScanQuality.assessQuality(sourceCanvas, bounds, opts);
+      const qualityFinished = now();
       const targetLongEdge = policy.targetLongEdge;
       let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
@@ -2114,7 +2198,10 @@
       }
       const lighting = state.opencvReady ? correctDocumentLighting(target, opts) : { applied: false, skipped: 'opencv-unavailable' };
       return { canvas: target, detected: bounds.detected, method: bounds.method,
-        quality: policy.quality, dpi: policy.dpi, effectiveDpi: policy.effectiveDpi, lighting };
+        quality: Object.assign({}, policy.quality, { report: qualityReport }),
+        dpi: policy.dpi, effectiveDpi: qualityReport.resolution.effectiveDpi, lighting,
+        timings: { qualityCheckMs: qualityFinished - qualityStarted,
+          documentProcessingMs: now() - started - (qualityFinished - qualityStarted) } };
     }
 
     function correctDocumentLighting(canvas, options = {}) {
@@ -2268,8 +2355,16 @@
     }
 
     async function saveCurrentRecord() {
-      if (!state.documentPages.length && !state.cccdPhotos.length) return saveNoteOnly();
       if (state.saving || state.processing) return;
+      const pendingQuality = [...state.documentPages, ...state.cccdPhotos].filter(item => {
+        const status = item.processingQuality && item.processingQuality.report && item.processingQuality.report.overall.status;
+        return status && status !== 'pass' && !item.qualityAccepted;
+      });
+      if (pendingQuality.length) {
+        alert(`Có ${pendingQuality.length} ảnh cần kiểm tra chất lượng. Hãy “Xem rõ chữ”, chụp lại hoặc bấm “Giữ ảnh (xác nhận ngoại lệ)” trước khi lưu.`);
+        setStatus('Chưa lưu: còn ảnh cần xác nhận chất lượng.', 'error');
+        return;
+      }
       state.saving = true;
       document.getElementById('btnSaveRecord').disabled = true;
       if (state.stream || state.cameraWanted) stopCamera('', true);
@@ -2403,7 +2498,7 @@
       state.cccdPhotos = [];
       state.selectedRowIndex = null;
       state.pendingRetakeId = null;
-      document.getElementById('btnSaveRecord').textContent = 'Lưu PDF GCN + CCCD';
+      document.getElementById('btnSaveRecord').textContent = 'Lưu hồ sơ';
       document.getElementById('docPageCount').textContent = '0';
       document.getElementById('cccdPageCount').textContent = '0';
       document.getElementById('thumbList').innerHTML = '';

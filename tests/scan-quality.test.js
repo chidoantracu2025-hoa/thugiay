@@ -154,6 +154,37 @@ function testDpiPolicy() {
   }
 }
 
+function testQualityGateV2() {
+  const api = environment().api;
+  const detected = { x: 0, y: 0, width: 3307, height: 2339, detected: true, method: 'opencv' };
+  const low = api.sourceResolution({ width: 1900, height: 1343 }, { x: 0, y: 0, width: 1900, height: 1343, detected: true }, { documentFormat: 'a3' });
+  assert(low.effectiveDpi < 200 && low.status === 'fail', 'A real A3 source below 200 dpi is rejected without upscaling.');
+  const pass = api.sourceResolution({ width: 5000, height: 3536 }, { x: 0, y: 0, width: 5000, height: 3536, detected: true }, { documentFormat: 'a3' });
+  assert(pass.effectiveDpi >= 300 && pass.status === 'pass');
+  const unknown = api.sourceResolution({ width: 5000, height: 3536 }, Object.assign({}, detected, { detected: false }), { documentFormat: 'a3' });
+  assert.strictEqual(unknown.effectiveDpi, null);
+  assert.strictEqual(unknown.status, 'unknown', 'DPI remains unknown when document geometry is not reliable.');
+  assert.strictEqual(api.dpiStatus(199.9, 'document'), 'fail');
+  assert.strictEqual(api.dpiStatus(220, 'document'), 'serious');
+  assert.strictEqual(api.dpiStatus(270, 'document'), 'review');
+  assert.strictEqual(api.dpiStatus(300, 'document'), 'pass');
+
+  const width = 360, height = 260;
+  const sharp = rgba(width, height, (x, y) => ((Math.floor(x / 5) + Math.floor(y / 7)) % 2 ? [25, 25, 25] : [238, 238, 238]));
+  const blurred = rgba(width, height, (x, y) => {
+    const value = 125 + Math.round(4 * Math.sin(x / 20) + 3 * Math.sin(y / 17));
+    return [value, value, value];
+  });
+  const blank = rgba(width, height, [245, 245, 245]);
+  const sharpResult = api.focusAssessmentFromPixels(sharp, width, height, true);
+  const blurredResult = api.focusAssessmentFromPixels(blurred, width, height, true);
+  const blankResult = api.focusAssessmentFromPixels(blank, width, height, true);
+  assert.strictEqual(sharpResult.status, 'pass');
+  assert(['fail', 'uncertain'].includes(blurredResult.status), 'A very soft low-detail page is never accepted as sharp.');
+  assert.strictEqual(blankResult.status, 'uncertain', 'A mostly blank page is not falsely declared blurred.');
+  assert(blankResult.confidence < sharpResult.confidence);
+}
+
 function testLightingClassification() {
   const api = environment().api;
   const width = 200, height = 150;
@@ -292,6 +323,7 @@ async function testDirectBitmapWorker() {
 
 (async () => {
   testDpiPolicy();
+  testQualityGateV2();
   testLightingClassification();
   testBoundedLightingAndInk();
   testWarpMemoryAndCleanup();

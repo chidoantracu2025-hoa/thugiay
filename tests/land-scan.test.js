@@ -19,7 +19,7 @@ function qualityHarness(source) {
   function canvas(width = 1, height = 1, content = '') {
     const value = { width, height, content };
     value.getContext = () => ({
-      fillRect() {},
+      fillRect() {}, save() {}, restore() {},
       drawImage(image) { value.content = image.content; },
       getImageData() { return {}; }
     });
@@ -190,7 +190,8 @@ async function assertNativeCamera(file) {
     const buttons = {};
     const makeCanvas = () => {
       const canvas = { width: 1, height: 1, draws: [] };
-      canvas.getContext = () => ({ drawImage() { canvas.draws.push(Array.prototype.slice.call(arguments)); } });
+      canvas.getContext = () => ({ fillStyle: '', globalCompositeOperation: '',
+        save() {}, restore() {}, fillRect() {}, drawImage() { canvas.draws.push(Array.prototype.slice.call(arguments)); } });
       canvas.toBlob = (callback, type, quality) => callback({ type, quality, size: 1000, width: canvas.width, height: canvas.height });
       canvases.push(canvas);
       return canvas;
@@ -201,12 +202,14 @@ async function assertNativeCamera(file) {
       querySelector: () => ({ classList: { remove() {} }, style: {} })
     };
     const state = { processing: false, saving: false, pendingRetakeId: null, stream,
-      documentPages: [], cccdPhotos: [], cameraWanted: true, detectionFrame: 25, cameraIdleTimer: 26 };
+      documentPages: [], cccdPhotos: [], cameraWanted: true, detectionFrame: 25, cameraIdleTimer: 26,
+      qualityDpi: 400, captureProfile: 'quality' };
     const originalBlob = { type: 'image/jpeg', size: 3000000 };
     const window = { document, URL: { createObjectURL: () => 'blob:preview-' + canvases.length,
       revokeObjectURL: url => revoked.push(url) } };
     const context = vm.createContext({ state, window, document, scanGeneration: 0,
-      clearTimeout: id => { events.push('clear-' + id); },
+      clearTimeout: id => { events.push('clear-' + id); }, setTimeout: () => 1,
+      performance: { now: () => 100 },
       waitForCameraFrame: async () => {},
       raiseFallbackCaptureResolution: async () => { events.push('raise-resolution'); },
       decodeImageFile: async blob => {
@@ -244,7 +247,7 @@ async function assertNativeCamera(file) {
       context.ImageCapture = ImageCapture;
     }
     vm.runInContext(fs.readFileSync(path.join(root, 'assets/scan-runtime.js'), 'utf8'), context);
-    vm.runInContext(['createCameraConstraints', 'stopCamera', 'capturePage'].map(name => functionCode(name, source)).join('\n'), context);
+    vm.runInContext(['createCameraConstraints', 'stopCamera', 'cameraPromise', 'capturePage'].map(name => functionCode(name, source)).join('\n'), context);
     const constraints = context.createCameraConstraints();
     assert.strictEqual(constraints.frameRate.ideal, 10);
     assert.strictEqual(constraints.frameRate.max, 15);

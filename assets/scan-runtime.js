@@ -145,14 +145,15 @@
     if (root.DocumentPdfExporter && root.DocumentPdfExporter.clearCache) root.DocumentPdfExporter.clearCache(item);
   }
 
-  function choosePhotoSettings(capabilities, type, dpi) {
+  function choosePhotoSettings(capabilities, type, dpi, profile) {
     const width = capabilities && capabilities.imageWidth;
     const height = capabilities && capabilities.imageHeight;
     if (!width || !height || !(width.max > 0) || !(height.max > 0)) return {};
     const documentPhoto = type === 'document';
     // A3 at 400 dpi plus camera aspect/crop margin; do not force a 48/108 MP sensor mode.
-    const pixelLimit = documentPhoto ? (dpi === 300 ? 26000000 : 42000000) : 8000000;
-    const edgeLimit = documentPhoto ? (dpi === 300 ? 6400 : 8000) : 3600;
+    const qualityMode = profile === 'quality';
+    const pixelLimit = documentPhoto ? (qualityMode && dpi !== 300 ? 42000000 : 26000000) : 8000000;
+    const edgeLimit = documentPhoto ? (qualityMode && dpi !== 300 ? 8000 : 6400) : 3600;
     const scale = Math.min(1, Math.sqrt(pixelLimit / (width.max * height.max)),
       edgeLimit / Math.max(width.max, height.max));
     function fit(range) {

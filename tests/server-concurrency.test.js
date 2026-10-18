@@ -221,6 +221,22 @@ function record() {
   assert.strictEqual(test.rows[first.rowIndex - 1][4], 'first owner');
 }
 
+// Metadata-only records retain all fields and an actual zero page count without creating Drive files.
+{
+  const test = fixture();
+  const result = test.server.saveScanRecord({ pageCount: 0, tenHuyen: 'Trà Cú', tenXaCu: 'Hàm Giang cũ',
+    tenXaMoi: 'Hàm Giang', hoTenCSD: 'Nguyễn Văn Không PDF', soHieuToBanDoMoi: '88',
+    soThuTuThuaMoi: '999', dienTich: '123.4', loaiMucDichSuDung: 'ONT', soHieuToBanDoCu: '7',
+    soThuTuThuaCu: '77', ap: 'Ấp thử', theChap: 'Không', soCCCD: '012345678901', ocrText: 'Ghi chú đầy đủ' });
+  const row = test.rows[result.rowIndex - 1];
+  assert.deepStrictEqual(row.slice(1, 13), ['Trà Cú', 'Hàm Giang cũ', 'Hàm Giang', 'Nguyễn Văn Không PDF', '88', '999',
+    '123.4', 'ONT', '7', '77', 'Ấp thử', 'Không']);
+  assert.strictEqual(row[15], '012345678901');
+  assert.strictEqual(row[19], '0');
+  assert.strictEqual(row[22], 'Ghi chú đầy đủ');
+  assert.strictEqual(test.files.length, 0);
+}
+
 // Reread after upload: retain other users' latest notes, status, card number and other PDF.
 {
   const test = fixture({ rows: [new Array(24).fill('HEADER'), record()] });

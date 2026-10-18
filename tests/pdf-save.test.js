@@ -38,8 +38,8 @@ function fixture(html, options) {
   }
   node('webAppUrl').value = 'https://example.invalid/initial-api';
   node('btnSaveRecord');
-  const documents = [image('document-1', 'document')];
-  const cards = [image('front-1', 'cccd-front'), image('back-1', 'cccd-back')];
+  const documents = options.noImages || options.onlyCards ? [] : [image('document-1', 'document')];
+  const cards = options.noImages ? [] : [image('front-1', 'cccd-front'), image('back-1', 'cccd-back')];
   const state = { documentPages: documents, cccdPhotos: cards, selectedRowIndex: options.rowIndex || null,
     saving: false, processing: false, stream: options.cameraOpen ? {} : null };
   const test = { nodes: nodes, state: state, exports: [], calls: [], alerts: [], statuses: [], renders: [], noteSaves: 0, cameraStops: 0 };
@@ -91,7 +91,7 @@ function fixture(html, options) {
     'normalizeFileNamePart', 'scanGroupKey', 'makeSaveAttempt', 'applySaveResult', 'saveCurrentRecord'
   ].map(function (name) { return functionCode(html, name); }).join('\n'), context);
   test.save = context.saveCurrentRecord;
-  test.fields = context.pdfUploadFields;
+  test.fields = context.pdfUploadFields; test.node = node;
   test.documents = documents; test.cards = cards;
   return test;
 }
@@ -410,7 +410,7 @@ async function verifyPage(page) {
     resetAfter(test);
   }
 
-  // Missing endpoint/busy pages cannot write; a photo-free form keeps its notes-only path.
+  // Missing endpoint/busy pages cannot write; a photo-free form saves every field through SAVE_SCAN.
   {
     const test = fixture(html); test.nodes.webAppUrl.value = '';
     await test.save();
@@ -422,9 +422,46 @@ async function verifyPage(page) {
     assert.strictEqual(test.calls.length, 0); assert.strictEqual(test.exports.length, 0); resetAfter(test);
   }
   {
-    const test = fixture(html); test.state.documentPages = []; test.state.cccdPhotos = [];
+    const test = fixture(html, { onlyCards: true, plans: [[part('original-cards')], [part('cccd-only')]] });
+    test.node('soCCCD').value = '012345678901';
+    test.node('hoTenCSD').value = 'Chỉ có CCCD';
     await test.save();
-    assert.strictEqual(test.noteSaves, 1); assert.strictEqual(test.calls.length, 0);
+    const payload = saves(test)[0].payload;
+    assert.strictEqual(payload.pageCount, 2);
+    assert.strictEqual(payload.soCCCD, '012345678901');
+    assert.strictEqual(payload.hoTenCSD, 'Chỉ có CCCD');
+    assert(has(payload, 'pdfOriginalBase64'));
+    assert(has(payload, 'pdfCCCDBase64'));
+    assert(!has(payload, 'pdfGCNBase64'));
+    assert.deepStrictEqual(Object.keys(payload.pdfGroupKeys).sort(), ['cccd', 'original']);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.original; }), [true, false]);
+    resetAfter(test);
+  }
+  {
+    const test = fixture(html, { noImages: true });
+    test.node('hoTenCSD').value = 'Nguyễn Văn Không PDF';
+    test.node('soCCCD').value = '012345678901';
+    test.node('soHieuToBanDoMoi').value = '88';
+    test.node('soThuTuThuaMoi').value = '999';
+    test.node('dienTich').value = '123.4';
+    test.node('ocrText').value = 'Ghi chú không có ảnh';
+    await test.save();
+    assert.strictEqual(test.noteSaves, 0);
+    assert.strictEqual(test.calls.length, 1);
+    const payload = saves(test)[0].payload;
+    assert.strictEqual(payload.hoTenCSD, 'Nguyễn Văn Không PDF');
+    assert.strictEqual(payload.soCCCD, '012345678901');
+    assert.strictEqual(payload.soHieuToBanDoMoi, '88');
+    assert.strictEqual(payload.soThuTuThuaMoi, '999');
+    assert.strictEqual(payload.dienTich, '123.4');
+    assert.strictEqual(payload.ocrText, 'Ghi chú không có ảnh');
+    assert.strictEqual(payload.pageCount, 0);
+    assert.deepStrictEqual(Object.keys(payload.pdfGroupKeys), []);
+    ['pdfOriginalBase64', 'pdfGCNBase64', 'pdfCCCDBase64', 'pdfOriginalFiles', 'pdfGCNFiles', 'pdfCCCDFiles'].forEach(function (key) {
+      assert(!has(payload, key), 'A metadata-only save must not add an empty PDF field.');
+    });
+    assert.strictEqual(test.exports.length, 0);
+    resetAfter(test);
   }
 }
 

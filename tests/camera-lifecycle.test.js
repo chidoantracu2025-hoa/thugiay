@@ -30,7 +30,7 @@ function harness(file) {
   const configuration = { play: null, cameras: [], decoded: null, failScan: false, keepSource: false, fallbackCalls: 0 };
   const state = { stream: null, saving: false, processing: false, cameraOpenGeneration: 0,
     cameraWanted: false, detectionFrame: 0, cameraIdleTimer: 0, pendingRetakeId: null,
-    documentPages: [], cccdPhotos: [], qualityDpi: 400 };
+    documentPages: [], cccdPhotos: [], qualityDpi: 400, captureProfile: 'fast' };
   function node(id) {
     if (!nodes[id]) nodes[id] = { value: '', disabled: true, style: {}, textContent: '', innerHTML: '',
       classList: { add() {}, remove() {} }, play() { return configuration.play || Promise.resolve(); }, pause() {},
@@ -74,7 +74,7 @@ function harness(file) {
     },
     createScanId: () => 'mock-scan', addScanItem: item => state.documentPages.push(item), replaceScanItem() {}, autoReadCccdNumber() {}
   });
-  vm.runInContext(['startCamera', 'createCameraConstraints', 'stopCamera', 'playCameraVideo', 'isLikelyMonochromeCamera', 'capturePage', 'saveCurrentRecord', 'clearForm']
+  vm.runInContext(['startCamera', 'createCameraConstraints', 'stopCamera', 'playCameraVideo', 'cameraPromise', 'raiseFallbackCaptureResolution', 'isLikelyMonochromeCamera', 'capturePage', 'saveCurrentRecord', 'clearForm']
     .map(name => code(name, source)).join('\n'), context);
   const visibilityStart = source.indexOf("    document.addEventListener('visibilitychange'");
   assert(visibilityStart >= 0);
@@ -190,6 +190,27 @@ async function testCancelDuringPlayAndColorFallback(file) {
   assert(timeout.alerts.some(message => /chưa phát được hình/.test(message)));
 }
 
+async function testCaptureTimeoutAndFallbackResolution(file) {
+  const env = harness(file), pending = deferred();
+  const timeoutResult = env.context.cameraPromise(pending.promise, 12000, 'timeout kiểm thử').then(() => '', error => error.message);
+  const timeout = Array.from(env.timers.values()).find(timer => timer.delay === 12000);
+  assert(timeout, file + ': takePhoto/getPhotoCapabilities can be bounded by a timeout.');
+  timeout.callback();
+  assert.strictEqual(await timeoutResult, 'timeout kiểm thử');
+
+  const video = { videoWidth: 1920, videoHeight: 1080 };
+  const track = { getCapabilities: () => ({ width: { max: 3840 }, height: { max: 2160 } }),
+    getSettings: () => ({ width: video.videoWidth, height: video.videoHeight }),
+    applyConstraints: async constraints => {
+      assert.strictEqual(constraints.width.ideal, 3840);
+      assert.strictEqual(constraints.height.ideal, 2160);
+      video.videoWidth = 3840; video.videoHeight = 2160;
+    } };
+  const result = await env.context.raiseFallbackCaptureResolution(track, video);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), { width: 3840, height: 2160 },
+    file + ': fallback reports actual dimensions after the track changes.');
+}
+
 function bitmap() { return { width: 8000, height: 6000, closed: 0, close() { this.closed++; } }; }
 
 async function testCaptureErrorsAndOwnership(file) {
@@ -266,6 +287,7 @@ async function testSaveCancelsPendingPermission(file) {
     await testPendingPermissions(file);
     await testNewRequestOwnership(file);
     await testCancelDuringPlayAndColorFallback(file);
+    await testCaptureTimeoutAndFallbackResolution(file);
     await testCaptureErrorsAndOwnership(file);
     await testSaveCancelsPendingPermission(file);
   }

@@ -347,7 +347,8 @@ function saveScanRecord(payload) {
   const rowIndex = Number(payload && payload.rowIndex ? payload.rowIndex : 0);
   const pdfOriginalBase64 = normalizeValue(payload && payload.pdfOriginalBase64);
   const originalFileName = normalizeValue(payload && (payload.fileNameOriginal || payload.originalFileName)) || fileName;
-  const requestedPageCount = Number(payload && payload.pageCount ? payload.pageCount : 1);
+  const rawPageCount = payload && payload.pageCount !== undefined && payload.pageCount !== null ? Number(payload.pageCount) : 1;
+  const requestedPageCount = isFinite(rawPageCount) && rawPageCount >= 0 ? Math.floor(rawPageCount) : 1;
   const requestedCreatedAt = normalizeValue(payload && payload.createdAt ? new Date(payload.createdAt).toISOString() : new Date().toISOString());
 
   const pdfGCNBase64 = normalizeValue(payload && (payload.pdfGCNBase64 || payload.pdfBase64));

@@ -51,7 +51,7 @@ async function processScanRequest(data) {
     output = scan.canvas.transferToImageBitmap();
     self.postMessage(Object.assign({}, envelope, { bitmap: output, detected: scan.detected,
       method: scan.method, quality: scan.quality, dpi: scan.dpi, effectiveDpi: scan.effectiveDpi,
-      lighting: scan.lighting }), [output]);
+      lighting: scan.lighting, timings: scan.timings }), [output]);
     output = null;
   } catch (error) {
     if (output) output.close();
@@ -576,8 +576,12 @@ async function processScanRequest(data) {
     }
 
     function prepareScan(sourceCanvas, opts = {}, mode = state.scanMode) {
+      const started = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
       const bounds = detectDocumentBounds(sourceCanvas, mode, opts);
       const policy = window.ScanQuality.outputPolicy(sourceCanvas, bounds, opts);
+      const qualityStarted = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      const qualityReport = window.ScanQuality.assessQuality(sourceCanvas, bounds, opts);
+      const qualityFinished = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
       const targetLongEdge = policy.targetLongEdge;
       let target;
       if (bounds.corners && (bounds.method === 'jscanify' || bounds.method === 'opencv')) {
@@ -595,7 +599,10 @@ async function processScanRequest(data) {
       }
       const lighting = state.opencvReady ? correctDocumentLighting(target, opts) : { applied: false, skipped: 'opencv-unavailable' };
       return { canvas: target, detected: bounds.detected, method: bounds.method,
-        quality: policy.quality, dpi: policy.dpi, effectiveDpi: policy.effectiveDpi, lighting };
+        quality: Object.assign({}, policy.quality, { report: qualityReport }),
+        dpi: policy.dpi, effectiveDpi: qualityReport.resolution.effectiveDpi, lighting,
+        timings: { qualityCheckMs: qualityFinished - qualityStarted,
+          documentProcessingMs: (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - started - (qualityFinished - qualityStarted) } };
     }
 
     function correctDocumentLighting(canvas, options = {}) {

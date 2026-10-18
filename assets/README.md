@@ -1,5 +1,7 @@
 # Local document scanning assets
 
+Camera Scan V2 adds an adaptive Quality Gate in `scan-quality.js`: source DPI is calculated from the detected physical document, focus is assessed across several regions, and lighting is classified on a small Worker-side probe. A `fail` or `review` result never deletes an image; the UI requires a retake or an explicit keep decision before saving. Central thresholds live in `ScanQuality.QUALITY_THRESHOLDS`.
+
 `DaiAn.html`, `HamGiang.html`, `LongHiep.html`, `LuuNghiepAnh.html`,
 `TapSon.html` and `TraCu.html` use these files for on-device OpenCV scanning,
 QR decoding, OCR and PDF generation. Deploy the entire `assets/` directory
