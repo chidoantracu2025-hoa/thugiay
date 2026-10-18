@@ -25,6 +25,12 @@ function stream(label) {
 
 function harness(file) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
+  const settings = source.match(/<details class="api-settings mt-8" id="cameraSettings">([\s\S]*?)<\/details>/);
+  assert(settings, file + ': camera settings must be collapsible');
+  assert(!/<details[^>]*\sopen(?:\s|>)/.test(settings[0]), file + ': camera settings should be collapsed initially');
+  ['cameraSelect', 'scanMode', 'qualityDpi', 'captureProfile'].forEach(function (id) {
+    assert(settings[1].includes('id="' + id + '"'), file + ': collapsed settings missing ' + id);
+  });
   const nodes = {}, events = {}, requests = [], alerts = [], statuses = [], captured = [], canvases = [], timers = new Map();
   let nextTimer = 0;
   const configuration = { play: null, cameras: [], decoded: null, failScan: false, keepSource: false, fallbackCalls: 0 };
