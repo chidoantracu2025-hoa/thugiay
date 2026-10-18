@@ -61,6 +61,7 @@ function harness(file) {
     buildPdfFileName: () => 'mock-gcn.pdf', buildCccdPdfFileName: () => 'mock-cccd.pdf', buildOriginalBackupFileName: () => 'mock-original.pdf',
     refreshCameras: async () => configuration.cameras,
     armCameraIdle() {}, scanCameraPreview() {}, closeScanReview() {}, renderRecordFiles() {},
+    appendSavePerformanceLog() {},
     waitForCameraFrame: async () => {},
     raiseFallbackCaptureResolution: async () => { configuration.fallbackCalls++; },
     decodeImageFile: async () => {

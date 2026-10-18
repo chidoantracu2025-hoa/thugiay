@@ -123,3 +123,26 @@ Các phương án cải thiện tiếp theo, theo mức hiệu quả và rủi r
 5. Nếu quyền truy cập cho phép, chia sẻ thư mục gốc một lần và để file đơn kế thừa quyền, giảm một lệnh `setSharing` cho mỗi PDF. Cần pilot vì chính sách Drive Workspace có thể chặn hoặc xử lý kế thừa khác nhau.
 
 Không có phép đo Google Drive production trong phiên làm việc này; các kết luận tốc độ Drive ở trên dựa trên audit luồng và kích thước truyền, không được trình bày như benchmark mạng thật.
+
+## 12. Nhật ký tốc độ lưu thực tế trên GitHub
+
+Sáu trang quét không lưu nhật ký vào điện thoại và không hiển thị nút tải/xóa log. Sau khi `SAVE_SCAN` hoàn tất, Apps Script cấp một mã ghi log dùng một lần, có hiệu lực tối đa 10 phút. Trình duyệt gửi một request nền `LOG_PERFORMANCE` với `keepalive`; request này không được `await`, nên thời gian GitHub không nằm trên đường chờ lưu hồ sơ và lỗi log không thay đổi thông báo nghiệp vụ.
+
+Apps Script lọc lại dữ liệu rồi tạo một file JSON riêng cho mỗi lần lưu tại:
+
+`performance-logs/YYYY-MM-DD/<UTC>_<trang>_<event-id>.json`
+
+Dùng file bất biến theo từng sự kiện tránh xung đột SHA khi nhiều người lưu cùng lúc. Đổi `GITHUB_LOG_PATH_PREFIX` nếu muốn thư mục khác. Mỗi sự kiện tạo một commit GitHub; nên đặt `GITHUB_LOG_BRANCH` thành nhánh log riêng nếu repository có workflow/deploy chạy trên nhánh chính.
+
+Các số đo gồm `exportMs`, `requestMs`, `totalMs`, `pdfBytesSent`, số trang, trạng thái, thời gian Drive/Sheet từ Apps Script và thông tin thiết bị/mạng do trình duyệt cung cấp. Danh sách trường cho phép được áp dụng ở cả trình duyệt và Apps Script. Log không chứa ảnh, họ tên, số CCCD, ghi chú/OCR, tên file, URL API, URL Drive, chỉ số dòng Sheet hoặc token GitHub.
+
+Cấu hình trong **Apps Script → Project Settings → Script Properties**:
+
+- `GITHUB_LOG_TOKEN`: fine-grained personal access token, chỉ cấp quyền **Contents: Read and write** cho repository log.
+- `GITHUB_LOG_REPOSITORY`: mặc định `chidoantracu2025-hoa/thugiay`.
+- `GITHUB_LOG_BRANCH`: mặc định `main`; nên dùng nhánh log riêng đã tạo sẵn.
+- `GITHUB_LOG_PATH_PREFIX`: mặc định `performance-logs`.
+
+Không đặt token trong HTML hoặc commit token vào repository. Nếu thiếu cấu hình, token hết hạn, mất mạng hoặc GitHub lỗi, hồ sơ vẫn được lưu bình thường và chỉ sự kiện log đó bị mất. Các lỗi xảy ra trước khi server hoàn tất `SAVE_SCAN` không có mã dùng một lần nên không được gửi lên GitHub.
+
+Để đánh giá thực tế, nên thu ít nhất 5 lần cho mỗi nhóm: chỉ metadata, chỉ CCCD, GCN 1–3 trang và hồ sơ phải chia PDF; sau đó tính trung vị và p95. Nếu `exportMs` cao, điểm nghẽn ở tạo/nén PDF. Nếu `requestMs` cao nhưng `serverTiming.totalMs` thấp, điểm nghẽn chủ yếu ở mạng/Base64. Nếu `driveMs` cao, điểm nghẽn ở Drive; nếu `sheetMs` cao, cần kiểm tra khóa hoặc thao tác Sheet.

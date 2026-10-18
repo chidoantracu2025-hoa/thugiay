@@ -19,6 +19,7 @@ function fixture(options) {
   };
   test.properties = {};
   test.cache = {};
+  test.githubCalls = [];
   test.nameLookups = 0;
   test.idLookups = 0;
   test.now = Date.now();
@@ -89,7 +90,11 @@ function fixture(options) {
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: function (algorithm, value) { return Array.from(crypto.createHash(algorithm).update(value).digest()); },
-      getUuid: function () { return crypto.randomBytes(16).toString('hex'); }
+      getUuid: function () { return crypto.randomBytes(16).toString('hex'); },
+      base64Encode: function (value) { return Buffer.from(value, 'utf8').toString('base64'); },
+      formatDate: function (date, zone, pattern) {
+        return pattern === 'yyyy-MM-dd' ? date.toISOString().slice(0, 10) : date.toISOString().replace(/[-:.]/g, '');
+      }
     },
     PropertiesService: {
       getScriptProperties: function () {
@@ -118,6 +123,12 @@ function fixture(options) {
       MimeType: { JSON: 'json' },
       createTextOutput: function (text) {
         return { setMimeType: function () { return this; }, getContent: function () { return text; } };
+      }
+    },
+    UrlFetchApp: {
+      fetch: function (url, options) {
+        test.githubCalls.push({ url: url, options: options });
+        return { getResponseCode: function () { return 201; } };
       }
     },
     SpreadsheetApp: {
@@ -235,6 +246,10 @@ function record() {
   assert.strictEqual(row[19], '0');
   assert.strictEqual(row[22], 'Ghi chú đầy đủ');
   assert.strictEqual(test.files.length, 0);
+  assert(result.serverTiming);
+  ['validationMs', 'driveMs', 'sheetMs', 'totalMs'].forEach(function (key) {
+    assert(Number.isFinite(result.serverTiming[key]) && result.serverTiming[key] >= 0, 'Invalid server timing: ' + key);
+  });
 }
 
 // Reread after upload: retain other users' latest notes, status, card number and other PDF.
@@ -811,5 +826,30 @@ function retryPayload(overrides) {
   assert.strictEqual(extra.reply.code, 'SAVE_BUSY');
   assert.strictEqual(JSON.stringify(test.properties), snapshot);
   assert(Buffer.byteLength(test.properties.SCAN_SAVE_INDEX_V1, 'utf8') < 9000);
+}
+
+// Performance logs require a one-use token issued by a completed save and only contain allowlisted diagnostics.
+{
+  const test = fixture();
+  test.properties.GITHUB_LOG_TOKEN = 'server-secret-token';
+  test.properties.GITHUB_LOG_REPOSITORY = 'owner/repository';
+  const saved = test.server.saveScanRecord({ hoTenCSD: 'Private owner', pageCount: 0 });
+  assert(/^[A-Za-z0-9_-]{20,100}$/.test(saved.performanceLogToken));
+  const payload = { logToken: saved.performanceLogToken, page: 'HamGiang', eventId: 'event_0123456789012345',
+    result: 'success', totalMs: 1234, requestMs: 900, hoTenCSD: 'Private owner', soCCCD: '987654321098',
+    ocrText: 'Private note', apiUrl: 'https://secret.invalid' };
+  const logged = test.server.writePerformanceLogToGitHub(payload);
+  assert.strictEqual(logged.success, true);
+  assert.strictEqual(test.githubCalls.length, 1);
+  assert(test.githubCalls[0].url.includes('/owner/repository/contents/performance-logs/'));
+  assert.strictEqual(test.githubCalls[0].options.headers.Authorization, 'Bearer server-secret-token');
+  const body = JSON.parse(test.githubCalls[0].options.payload);
+  const content = Buffer.from(body.content, 'base64').toString('utf8');
+  assert(content.includes('"totalMs": 1234'));
+  ['Private owner', '987654321098', 'Private note', 'secret.invalid', 'server-secret-token'].forEach(function (privateValue) {
+    assert(!content.includes(privateValue), 'Private value leaked to GitHub: ' + privateValue);
+  });
+  assert.strictEqual(test.server.writePerformanceLogToGitHub(payload).success, false, 'A log token is one-use only');
+  assert.strictEqual(test.githubCalls.length, 1);
 }
 console.log('PASS: idempotent save replay, resumable parts/groups, exclusive per-request leases, row/flush recovery and cached folder lookup');

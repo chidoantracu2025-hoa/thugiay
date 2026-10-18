@@ -592,6 +592,33 @@
       try { sessionStorage.setItem(PAGE_STORAGE_KEYS[name], value); } catch (_) {}
     }
 
+    function appendSavePerformanceLog(entry) {
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+      const safe = {
+        version: 3, at: new Date().toISOString(), page: SCAN_PAGE_ID,
+        eventId: ScanSession.createId(),
+        result: String(entry.result || 'unknown').slice(0, 32), errorCode: entry.errorCode ? String(entry.errorCode).slice(0, 48) : '',
+        update: Boolean(entry.update), documentPages: Number(entry.documentPages || 0), cccdPages: Number(entry.cccdPages || 0),
+        pdfBytesSent: Number(entry.pdfBytesSent || 0), exportMs: Number(entry.exportMs || 0),
+        requestMs: Number(entry.requestMs || 0), totalMs: Number(entry.totalMs || 0),
+        serverTiming: entry.serverTiming && typeof entry.serverTiming === 'object' ? {
+          validationMs: Number(entry.serverTiming.validationMs || 0), driveMs: Number(entry.serverTiming.driveMs || 0),
+          sheetMs: Number(entry.serverTiming.sheetMs || 0), totalMs: Number(entry.serverTiming.totalMs || 0)
+        } : null,
+        network: { effectiveType: connection.effectiveType || '', downlinkMbps: Number(connection.downlink || 0), rttMs: Number(connection.rtt || 0) },
+        device: { memoryGb: Number(navigator.deviceMemory || 0), logicalCores: Number(navigator.hardwareConcurrency || 0) }
+      };
+      const requestUrl = getApiUrl();
+      const logToken = entry.performanceLogToken ? String(entry.performanceLogToken) : '';
+      if (!requestUrl || !logToken || typeof fetch !== 'function') return safe;
+      try {
+        fetch(requestUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'LOG_PERFORMANCE', payload: { ...safe, logToken } }), redirect: 'follow', keepalive: true })
+          .catch(() => {});
+      } catch (_) { /* Logging is best effort and must never block or fail a record save. */ }
+      return safe;
+    }
+
     const state = {
       stream: null,
       cameraWanted: false,
@@ -767,6 +794,7 @@
       badge.style.color = tone === 'error' ? '#991b1b' : tone === 'success' ? '#166534' : '#ffffff';
       badge.style.border = '1px solid rgba(255,255,255,.25)';
     }
+
 
     function getApiUrl() {
       const url = document.getElementById('webAppUrl').value.trim();
@@ -2358,12 +2386,16 @@
     }
 
     async function saveCurrentRecord() {
+      const saveActionStarted = performance.now();
       if (state.saving || state.processing) return;
       const pendingQuality = [...state.documentPages, ...state.cccdPhotos].filter(item => {
         const status = item.processingQuality && item.processingQuality.report && item.processingQuality.report.overall.status;
         return status && status !== 'pass' && !item.qualityAccepted;
       });
       if (pendingQuality.length) {
+        appendSavePerformanceLog({ result: 'blocked-quality', update: state.selectedRowIndex >= 2,
+          documentPages: state.documentPages.length, cccdPages: state.cccdPhotos.length,
+          totalMs: performance.now() - saveActionStarted });
         alert(`Có ${pendingQuality.length} ảnh cần kiểm tra chất lượng. Hãy “Xem rõ chữ”, chụp lại hoặc bấm “Giữ ảnh (xác nhận ngoại lệ)” trước khi lưu.`);
         setStatus('Chưa lưu: còn ảnh cần xác nhận chất lượng.', 'error');
         return;
@@ -2373,7 +2405,7 @@
       if (state.stream || state.cameraWanted) stopCamera('', true);
       let attempt = null;
       let sending = false;
-      const startTime = performance.now();
+      const startTime = saveActionStarted;
       try {
         setStatus('Đang hoàn tất đọc CCCD và chuẩn bị hồ sơ...', 'normal');
         await identityQueue;
@@ -2404,7 +2436,11 @@
           fileName: buildPdfFileName(), fileNameCCCD: buildCccdPdfFileName(), fileNameOriginal: buildOriginalBackupFileName()
         };
         attempt = makeSaveAttempt(payload, requestUrl, { original: [...documentPages, ...cccdPhotos], gcn: documentPages, cccd: cccdPhotos });
-        if (attempt.complete) { setStatus('Hồ sơ và PDF đã được lưu; chưa có thay đổi mới.', 'success'); return; }
+        if (attempt.complete) {
+          appendSavePerformanceLog({ result: 'unchanged', update: state.selectedRowIndex >= 2,
+            documentPages: documentPages.length, cccdPages: cccdPhotos.length, totalMs: performance.now() - startTime });
+          setStatus('Hồ sơ và PDF đã được lưu; chưa có thay đổi mới.', 'success'); return;
+        }
         if (attempt.uncertain) {
           setStatus('Đang kiểm tra lần lưu trước để tránh tải trùng PDF...', 'normal');
           try {
@@ -2413,7 +2449,13 @@
               attempt.retrySupported = true;
               Object.assign(attempt.acknowledged, status.savedPdfGroupKeys || {});
               if (status.rowIndex) attempt.savedRowIndex = status.rowIndex;
-              if (status.pdfUploadComplete) { applySaveResult(attempt, status); return; }
+              if (status.pdfUploadComplete) {
+                appendSavePerformanceLog({ result: 'recovered', update: state.selectedRowIndex >= 2,
+                  documentPages: documentPages.length, cccdPages: cccdPhotos.length,
+                  requestMs: performance.now() - startTime, totalMs: performance.now() - startTime,
+                  serverTiming: status.serverTiming, performanceLogToken: status.performanceLogToken });
+                applySaveResult(attempt, status); return;
+              }
               if (status.processing) throw Object.assign(new Error('Lần lưu trước vẫn đang chạy trên Google. Vui lòng chờ rồi bấm lưu tiếp.'), { code: 'SAVE_IN_PROGRESS' });
             }
           } catch (error) {
@@ -2452,9 +2494,17 @@
         state.lastSaveTiming = { exportMs: uploadStart - exportStart, uploadMs: performance.now() - uploadStart,
           totalMs: performance.now() - startTime,
           pdfBytesSent: Object.keys(prepared).reduce((sum, kind) => sum + prepared[kind].reduce((n, part) => n + part.byteLength, 0), 0) };
+        appendSavePerformanceLog({ result: result.pdfUploadComplete === false ? 'partial' : 'success',
+          update: state.selectedRowIndex >= 2, documentPages: documentPages.length, cccdPages: cccdPhotos.length,
+          pdfBytesSent: state.lastSaveTiming.pdfBytesSent, exportMs: state.lastSaveTiming.exportMs,
+          requestMs: state.lastSaveTiming.uploadMs, totalMs: state.lastSaveTiming.totalMs,
+          serverTiming: result.serverTiming, performanceLogToken: result.performanceLogToken });
         applySaveResult(attempt, result);
       } catch (error) {
         if (attempt && sending) attempt.uncertain = true;
+        appendSavePerformanceLog({ result: 'error', errorCode: error.code || 'UNCLASSIFIED',
+          update: state.selectedRowIndex >= 2, documentPages: state.documentPages.length,
+          cccdPages: state.cccdPhotos.length, totalMs: performance.now() - startTime });
         alert('Chưa lưu hoàn tất: ' + error.message);
         setStatus(error.code === 'SAVE_IN_PROGRESS' ? error.message : 'Lưu chưa hoàn tất; ảnh vẫn được giữ để thử lại.', 'error');
       } finally {

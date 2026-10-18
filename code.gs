@@ -39,6 +39,8 @@ function doPost(e) {
         return jsonResponse(saveScanRecord(payload));
       case 'SAVE_STATUS':
         return jsonResponse(getSaveRequestStatus(payload));
+      case 'LOG_PERFORMANCE':
+        return jsonResponse(writePerformanceLogToGitHub(payload));
       case 'UPDATE_NOTES':
         return jsonResponse(updateRecordNotes(payload));
       case 'LIST':
@@ -62,6 +64,80 @@ function jsonResponse(obj) {
 function pdfUploadCapabilities() {
   return { pdfUploadVersion: 2, supportsPdfParts: true, maxPdfBytes: MAX_PDF_BYTES,
     supportsSaveRetry: true, supportsSaveStatus: true, saveRequestVersion: 1 };
+}
+
+function issuePerformanceLogToken(saveRequestId) {
+  if (typeof CacheService === 'undefined') return '';
+  const token = Utilities.getUuid().replace(/-/g, '');
+  CacheService.getScriptCache().put('PERF_LOG_' + token, normalizeValue(saveRequestId), 600);
+  return token;
+}
+
+function safePerformanceNumber(value) {
+  const number = Number(value);
+  return isFinite(number) && number >= 0 ? Math.min(number, 24 * 60 * 60 * 1000) : 0;
+}
+
+function sanitizePerformanceLog(payload) {
+  const timing = payload && payload.serverTiming && typeof payload.serverTiming === 'object' ? payload.serverTiming : null;
+  const network = payload && payload.network && typeof payload.network === 'object' ? payload.network : {};
+  const device = payload && payload.device && typeof payload.device === 'object' ? payload.device : {};
+  return {
+    version: 3,
+    receivedAt: new Date().toISOString(),
+    capturedAt: normalizeValue(payload && payload.at).slice(0, 32),
+    page: normalizeValue(payload && payload.page).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32),
+    eventId: normalizeValue(payload && payload.eventId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 100),
+    result: normalizeValue(payload && payload.result).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32),
+    errorCode: normalizeValue(payload && payload.errorCode).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48),
+    update: Boolean(payload && payload.update),
+    documentPages: Math.floor(safePerformanceNumber(payload && payload.documentPages)),
+    cccdPages: Math.floor(safePerformanceNumber(payload && payload.cccdPages)),
+    pdfBytesSent: Math.floor(safePerformanceNumber(payload && payload.pdfBytesSent)),
+    exportMs: safePerformanceNumber(payload && payload.exportMs),
+    requestMs: safePerformanceNumber(payload && payload.requestMs),
+    totalMs: safePerformanceNumber(payload && payload.totalMs),
+    serverTiming: timing ? {
+      validationMs: safePerformanceNumber(timing.validationMs), driveMs: safePerformanceNumber(timing.driveMs),
+      sheetMs: safePerformanceNumber(timing.sheetMs), totalMs: safePerformanceNumber(timing.totalMs)
+    } : null,
+    network: {
+      effectiveType: normalizeValue(network.effectiveType).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16),
+      downlinkMbps: safePerformanceNumber(network.downlinkMbps), rttMs: safePerformanceNumber(network.rttMs)
+    },
+    device: { memoryGb: safePerformanceNumber(device.memoryGb), logicalCores: safePerformanceNumber(device.logicalCores) }
+  };
+}
+
+function writePerformanceLogToGitHub(payload) {
+  const token = normalizeValue(payload && payload.logToken);
+  const cache = typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null;
+  if (!cache || !/^[A-Za-z0-9_-]{20,100}$/.test(token) || cache.get('PERF_LOG_' + token) === null) {
+    return { success: false, error: 'Phiên ghi log không hợp lệ hoặc đã hết hạn.' };
+  }
+  cache.remove('PERF_LOG_' + token);
+  const properties = PropertiesService.getScriptProperties();
+  const githubToken = normalizeValue(properties.getProperty('GITHUB_LOG_TOKEN'));
+  const repository = normalizeValue(properties.getProperty('GITHUB_LOG_REPOSITORY')) || 'chidoantracu2025-hoa/thugiay';
+  const branch = normalizeValue(properties.getProperty('GITHUB_LOG_BRANCH')) || 'main';
+  const prefix = normalizeValue(properties.getProperty('GITHUB_LOG_PATH_PREFIX')) || 'performance-logs';
+  if (!githubToken || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    return { success: false, error: 'Chưa cấu hình nơi lưu log GitHub.' };
+  }
+  const log = sanitizePerformanceLog(payload);
+  const now = new Date();
+  const day = Utilities.formatDate(now, 'UTC', 'yyyy-MM-dd');
+  const stamp = Utilities.formatDate(now, 'UTC', "yyyyMMdd'T'HHmmssSSS'Z'");
+  const fileName = [stamp, log.page || 'unknown', log.eventId || Utilities.getUuid().replace(/-/g, '')].join('_') + '.json';
+  const path = (prefix + '/' + day + '/' + fileName).split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  const response = UrlFetchApp.fetch('https://api.github.com/repos/' + repository + '/contents/' + path, {
+    method: 'put', muteHttpExceptions: true, contentType: 'application/json',
+    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + githubToken,
+      'X-GitHub-Api-Version': '2022-11-28' },
+    payload: JSON.stringify({ message: 'log: save performance ' + day, content: Utilities.base64Encode(JSON.stringify(log, null, 2)), branch: branch })
+  });
+  const status = response.getResponseCode();
+  return status === 201 ? { success: true } : { success: false, error: 'GitHub HTTP ' + status };
 }
 
 function withScriptLock(callback, flushSpreadsheet) {
@@ -343,6 +419,7 @@ function updateRecordNotes(payload) {
 }
 
 function saveScanRecord(payload) {
+  const operationStartedAt = Date.now();
   const fileName = normalizeValue(payload && payload.fileName ? payload.fileName : `Ho_So_Dat_Dai_${Date.now()}.pdf`);
   const rowIndex = Number(payload && payload.rowIndex ? payload.rowIndex : 0);
   const pdfOriginalBase64 = normalizeValue(payload && payload.pdfOriginalBase64);
@@ -368,6 +445,7 @@ function saveScanRecord(payload) {
     const uploaded = {};
     const incompletePdfGroups = [];
     let folder = null;
+    const driveStartedAt = Date.now();
 
     if (originalFiles.length || gcnFiles.length || cccdFiles.length) {
       try {
@@ -404,7 +482,9 @@ function saveScanRecord(payload) {
         driveWarnings.push('Chưa lưu đầy đủ PDF ' + group.label + ' lên Drive: ' + error.toString());
       }
     }
+    const driveFinishedAt = Date.now();
 
+    const sheetStartedAt = Date.now();
     const result = withScriptLock(function () {
       // Another request may have edited this row while Drive was receiving the PDFs.
       const lastRow = sheet.getLastRow();
@@ -492,6 +572,14 @@ function saveScanRecord(payload) {
         rowIndex: savedRowIndex
       };
     }, true);
+    const sheetFinishedAt = Date.now();
+    result.serverTiming = {
+      validationMs: Math.max(0, driveStartedAt - operationStartedAt),
+      driveMs: Math.max(0, driveFinishedAt - driveStartedAt),
+      sheetMs: Math.max(0, sheetFinishedAt - sheetStartedAt),
+      totalMs: Math.max(0, sheetFinishedAt - operationStartedAt)
+    };
+    result.performanceLogToken = issuePerformanceLogToken(retry ? retry.state.id : 'legacy-save');
     if (retry) {
       Object.keys(uploaded).forEach(function (key) { retry.state.groups[key].appliedToRow = true; });
       result.saveRequestId = retry.state.id;

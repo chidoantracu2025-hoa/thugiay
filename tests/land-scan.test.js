@@ -324,6 +324,7 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
     withScriptLock: callback => callback(), MAX_PDF_BYTES: 10000000,
     ensureFolder: () => ({}), normalizeValue: value => value == null ? '' : String(value).trim(),
     savePdfToDrive: (folder, base64, name) => { savedNames.push(name); return { fileId: String(savedNames.length), fileUrl: 'local-test' }; },
+    issuePerformanceLogToken: () => 'test-performance-token',
     normalizeProcessingStatus: () => 'Chưa xử lý' });
   vm.runInContext(gs.slice(gs.indexOf('function saveScanRecord('), gs.indexOf('function savePdfToDrive(')), server);
   const result = server.saveScanRecord({ fileName: 'TEST_GCN.pdf', fileNameOriginal: 'TEST_BAN_GOC.pdf',

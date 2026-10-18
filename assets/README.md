@@ -158,3 +158,8 @@ use the defaults and can change sources for the current visit.
 Validation: `node tests/report-dashboard.test.js` and
 `node tests/report-sources.test.js`. These checks use generated data and make
 no requests to Google Sheets.
+
+
+## GitHub performance logs
+
+Save timing is dispatched in the background through the deployed Apps Script and is not stored in the browser. Configure these Apps Script properties: `GITHUB_LOG_TOKEN` (fine-grained token restricted to this repository with Contents read/write), `GITHUB_LOG_REPOSITORY` (defaults to `chidoantracu2025-hoa/thugiay`), `GITHUB_LOG_BRANCH` (defaults to `main`) and `GITHUB_LOG_PATH_PREFIX` (defaults to `performance-logs`). Prefer a dedicated existing log branch so log commits do not trigger main-branch deployment workflows. Never put the token in an HTML file or commit it. Logging is best effort and never changes the record-save result.

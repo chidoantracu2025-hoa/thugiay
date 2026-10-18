@@ -42,7 +42,8 @@ function fixture(html, options) {
   const cards = options.noImages ? [] : [image('front-1', 'cccd-front'), image('back-1', 'cccd-back')];
   const state = { documentPages: documents, cccdPhotos: cards, selectedRowIndex: options.rowIndex || null,
     saving: false, processing: false, stream: options.cameraOpen ? {} : null };
-  const test = { nodes: nodes, state: state, exports: [], calls: [], alerts: [], statuses: [], renders: [], noteSaves: 0, cameraStops: 0 };
+  const test = { nodes: nodes, state: state, exports: [], calls: [], alerts: [], statuses: [], renders: [],
+    performanceLogs: [], noteSaves: 0, cameraStops: 0 };
   const plans = options.plans || [[part('original')], [part('gcn')], [part('cccd')]];
   let identifier = 0, tick = 0;
   const context = vm.createContext({
@@ -82,6 +83,7 @@ function fixture(html, options) {
     alert: function (text) { test.alerts.push(text); },
     setStatus: function (text, tone) { test.statuses.push({ text: text, tone: tone }); },
     renderRecordFiles: function (files) { test.renders.push(files); },
+    appendSavePerformanceLog: function (entry) { test.performanceLogs.push(Object.assign({}, entry)); return entry; },
     saveNoteOnly: function () { test.noteSaves++; }
   });
   vm.runInContext(runtime, context);
@@ -128,9 +130,15 @@ async function verifyPage(page) {
     assert.strictEqual(test.cameraStops, 1);
     assert.strictEqual(test.state.selectedRowIndex, 20);
     assert.strictEqual(test.state.lastSaveTiming.pdfBytesSent, 3000);
+    assert.strictEqual(test.performanceLogs[0].result, 'success');
+    assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 3000);
+    ['exportMs', 'requestMs', 'totalMs'].forEach(function (key) {
+      assert(Number.isFinite(test.performanceLogs[0][key]) && test.performanceLogs[0][key] >= 0);
+    });
     await test.save();
     assert.strictEqual(test.calls.length, 1, 'An unchanged second click must not append or upload again');
     assert.strictEqual(test.exports.length, 3);
+    assert.strictEqual(test.performanceLogs[1].result, 'unchanged');
     resetAfter(test); imagesRetained(test);
   }
 
@@ -435,6 +443,8 @@ async function verifyPage(page) {
     assert(!has(payload, 'pdfGCNBase64'));
     assert.deepStrictEqual(Object.keys(payload.pdfGroupKeys).sort(), ['cccd', 'original']);
     assert.deepStrictEqual(test.exports.map(function (stage) { return stage.original; }), [true, false]);
+    assert.strictEqual(test.performanceLogs[0].result, 'success');
+    assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 2000);
     resetAfter(test);
   }
   {
@@ -461,6 +471,8 @@ async function verifyPage(page) {
       assert(!has(payload, key), 'A metadata-only save must not add an empty PDF field.');
     });
     assert.strictEqual(test.exports.length, 0);
+    assert.strictEqual(test.performanceLogs[0].result, 'success');
+    assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 0);
     resetAfter(test);
   }
 }
