@@ -121,7 +121,8 @@
       item.processedBlob = blob;
       item.processedWidth = width;
       item.processedHeight = height;
-      item.processedDpi = Number(item.dpi || item.processingQuality && item.processingQuality.dpi) === 300 ? 300 : 400;
+      const storedDpi = Number(item.dpi || item.processingQuality && item.processingQuality.dpi);
+      item.processedDpi = storedDpi === 200 ? 200 : storedDpi === 300 ? 300 : 400;
       item.processedQuality = quality;
       item.processedCanonical = true;
       // A preview failure can retain the same object as the original; never destroy that fallback.
@@ -152,8 +153,9 @@
     const documentPhoto = type === 'document';
     // A3 at 400 dpi plus camera aspect/crop margin; do not force a 48/108 MP sensor mode.
     const qualityMode = profile === 'quality';
-    const pixelLimit = documentPhoto ? (qualityMode && dpi !== 300 ? 42000000 : 26000000) : 8000000;
-    const edgeLimit = documentPhoto ? (qualityMode && dpi !== 300 ? 8000 : 6400) : 3600;
+    const selectedDpi = Number(dpi);
+    const pixelLimit = documentPhoto ? (selectedDpi === 200 ? 18000000 : (qualityMode && selectedDpi !== 300 ? 42000000 : 26000000)) : 8000000;
+    const edgeLimit = documentPhoto ? (selectedDpi === 200 ? 5200 : (qualityMode && selectedDpi !== 300 ? 8000 : 6400)) : 3600;
     const scale = Math.min(1, Math.sqrt(pixelLimit / (width.max * height.max)),
       edgeLimit / Math.max(width.max, height.max));
     function fit(range) {

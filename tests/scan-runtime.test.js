@@ -284,6 +284,9 @@ function testPhotoSettings() {
   const economy = api.choosePhotoSettings(sensor, 'document', 300);
   assert(economy.imageWidth * economy.imageHeight <= 26000000);
   assert(Math.max(economy.imageWidth, economy.imageHeight) <= 6400, 'Explicit 300 dpi uses a smaller still-photo sensor mode where supported.');
+  const economy200 = api.choosePhotoSettings(sensor, 'document', 200, 'quality');
+  assert(economy200.imageWidth * economy200.imageHeight <= 18000000);
+  assert(Math.max(economy200.imageWidth, economy200.imageHeight) <= 5200, 'Explicit 200 dpi uses the bounded economy sensor mode.');
   const small = api.choosePhotoSettings({ imageWidth: { max: 4032 }, imageHeight: { max: 3024 } }, 'document');
   assert.deepStrictEqual([small.imageWidth, small.imageHeight], [4032, 3024], 'A smaller camera is never enlarged to an unavailable sensor mode.');
   const fixed = api.choosePhotoSettings({ imageWidth: { min: 8000, max: 8000 }, imageHeight: { min: 6000, max: 6000 } }, 'document');

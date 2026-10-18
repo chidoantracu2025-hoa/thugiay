@@ -124,6 +124,10 @@ function testDpiPolicy() {
   const economy = api.outputPolicy(sourceImage, bounds, { dpi: 300 });
   assert.strictEqual(economy.dpi, 300);
   assert.strictEqual(economy.quality.dpiSelection, 'explicit');
+  const economy200 = api.outputPolicy(sourceImage, bounds, { dpi: 200 });
+  assert.strictEqual(economy200.dpi, 200);
+  assert.strictEqual(economy200.quality.dpiSelection, 'explicit');
+  assert(economy200.pixelWidth < economy.pixelWidth && economy200.pixelHeight < economy.pixelHeight);
   assert(economy.pixelWidth * economy.pixelHeight < result.pixelWidth * result.pixelHeight * 0.57);
   const fakeConfidence = api.outputPolicy(sourceImage, bounds, { qualityEvidence: { laplacian: 5000, readableAt300: true } });
   assert.strictEqual(fakeConfidence.dpi, 400, 'High contrast/sharpness alone cannot justify discarding small text detail.');

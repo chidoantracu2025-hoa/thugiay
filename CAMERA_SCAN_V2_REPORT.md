@@ -85,7 +85,7 @@ Chi phí Quality Gate đo được dưới mục tiêu 200–300 ms trên máy n
 | Độ nét | Chưa đánh giá độc lập | Đa vùng, nhiều chỉ số, có uncertain cho trang ít chữ | Đạt bằng synthetic test |
 | Tốc độ xử lý | Worker và preview nhẹ | Quality Gate cùng decode/Worker, 19,2 ms trên máy phát triển | Đạt trong môi trường thử |
 | Bộ nhớ | Blob/ImageBitmap, giải phóng canvas | Giữ nguyên; probe tối đa 560/720 px | Đạt bằng lifecycle test |
-| PDF | 300/400 dpi, ≤10 MB, chia phần | Giữ nguyên, không upscale và không dùng thumbnail | Đạt |
+| PDF | 300/400 dpi, ≤10 MB, chia phần | Hỗ trợ 200/300/400 dpi, không upscale và không dùng thumbnail | Đạt |
 | Camera Android | ImageCapture/fallback | Adaptive capability + camera hệ thống | Chưa kiểm thử máy thật |
 | Camera iOS | Chủ yếu file capture/fallback | Camera hệ thống được giữ và gắn nguồn | Chưa kiểm thử máy thật |
 
@@ -165,6 +165,6 @@ Từ log thực tế 2 trang ngày 2026-10-18 (15,32 MiB PDF, tổng 65,88 giây
 - Giới hạn cứng 10 MB mỗi file và cơ chế chia PDF vẫn giữ nguyên.
 - Ảnh nguồn, kích thước pixel dùng cho Quality Gate và bản chụp trước xử lý không bị thay thế. Cache PDF phân biệt DPI/mục tiêu byte để không tái sử dụng nhầm bản 400 DPI khi mạng chuyển sang 300 DPI.
 - DPI thực tế dùng khi xuất được ghi vào log GitHub qua trường `outputDpi`.
-- Tổng thao tác lưu có ngân sách chờ 40 giây trên trình duyệt. Nếu hết thời gian, UI thông báo rõ, giữ ảnh và đổi nút thành **Cập nhật / lưu tiếp**. Request đang chạy được đánh dấu chưa chắc chắn; lần bấm sau gọi `SAVE_STATUS` trước khi gửi lại để tránh tạo file/dòng trùng.
+- Trình duyệt tiếp tục chờ đến khi Google trả kết quả và không còn tự hủy ở mốc 40 giây. Nếu mạng hoặc Drive thật sự lỗi, UI báo lưu chưa thành công, giữ ảnh và đổi nút thành **Cập nhật / lưu tiếp**; lần bấm sau gọi `SAVE_STATUS` trước khi gửi lại để tránh tạo file/dòng trùng. Người dùng có thể chọn 200/300/400 dpi; 200 dpi là chế độ tiết kiệm dữ liệu và phải kiểm tra chữ nhỏ.
 
 Chưa có log điện thoại thực tế sau thay đổi này, vì vậy mức giảm từ 65,88 giây vẫn là mục tiêu cần đo lại, chưa phải kết quả benchmark đã xác nhận.

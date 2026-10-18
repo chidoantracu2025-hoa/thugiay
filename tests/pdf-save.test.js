@@ -440,13 +440,12 @@ async function verifyPage(page) {
   }
   {
     const test = fixture(html, { onExport: function (index, current) {
-      if (index === 0) current.advanceTime(40000);
+      if (index === 0) current.advanceTime(45000);
     } });
     await test.save();
-    assert.strictEqual(saves(test).length, 0, 'A save that spends its 40-second budget exporting must not begin an uncertain upload.');
-    assert.strictEqual(test.nodes.btnSaveRecord.textContent, 'Cập nhật / lưu tiếp');
-    assert(test.alerts[0].indexOf('40 giây') >= 0);
-    resetAfter(test); imagesRetained(test);
+    assert.strictEqual(saves(test).length, 1, 'A slow PDF export must still wait for and complete the Google save.');
+    assert.strictEqual(test.performanceLogs[0].result, 'success');
+    resetAfter(test);
   }
   {
     const test = fixture(html, { onlyCards: true, networkType: '3g', downlink: 1.45,
@@ -466,6 +465,14 @@ async function verifyPage(page) {
     assert.deepStrictEqual(test.exports.map(function (stage) { return stage.dpiOverride; }), [300, 300]);
     assert.strictEqual(test.performanceLogs[0].result, 'success');
     assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 2000);
+    resetAfter(test);
+  }
+  {
+    const test = fixture(html, { onlyCards: true, qualityDpi: 200,
+      plans: [[part('original-cards')], [part('cccd-only')]] });
+    await test.save();
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.dpiOverride; }), [200, 200]);
+    assert.strictEqual(test.performanceLogs[0].outputDpi, 200);
     resetAfter(test);
   }
   {
@@ -498,33 +505,10 @@ async function verifyPage(page) {
   }
 }
 
-async function verifyApiTimeout() {
-  const html = fs.readFileSync(path.join(root, 'HamGiang.html'), 'utf8');
-  function Controller() { this.signal = { aborted: false }; }
-  Controller.prototype.abort = function () { this.signal.aborted = true; };
-  const context = vm.createContext({
-    AbortController: Controller,
-    setTimeout: function (callback) { callback(); return 1; }, clearTimeout: function () {},
-    getApiUrl: function () { return ''; }, safeJsonParse: JSON.parse,
-    fetch: async function (url, options) {
-      assert.strictEqual(options.signal.aborted, true);
-      throw new Error('aborted');
-    },
-    Number: Number, JSON: JSON, Error: Error
-  });
-  vm.runInContext(functionCode(html, 'apiRequest'), context);
-  let error;
-  try { await context.apiRequest('SAVE_SCAN', {}, 'https://example.invalid', { timeoutMs: 10 }); }
-  catch (caught) { error = caught; }
-  assert(error && error.code === 'SAVE_TIME_LIMIT');
-  assert(error.message.indexOf('Cập nhật / lưu tiếp') >= 0);
-}
-
 (async function () {
   for (const page of pages) {
     try { await verifyPage(page); }
     catch (error) { error.message = page + ': ' + error.message; throw error; }
   }
-  await verifyApiTimeout();
-  console.log('PASS: six-page PDF staging/cache, partial/group retry, lost-response status, legacy same-row fallback, metadata-only updates and camera pause');
+  console.log('PASS: six-page PDF staging/cache, no artificial save timeout, 200/300/400 dpi, partial/group retry, lost-response status, legacy same-row fallback, metadata-only updates and camera pause');
 })().catch(function (error) { console.error(error); process.exitCode = 1; });

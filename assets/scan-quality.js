@@ -57,8 +57,9 @@
     const widthMm = landscape ? longMm : shortMm;
     const heightMm = landscape ? shortMm : longMm;
     const placement = Math.min(widthMm / natural.width, heightMm / natural.height);
-    const verified = Number(options.dpi) !== 400 && verifiedFor300(options.qualityEvidence);
-    const dpi = Number(options.dpi) === 300 || verified ? 300 : DEFAULT_DPI;
+    const requestedDpi = Number(options.dpi);
+    const verified = requestedDpi !== 400 && verifiedFor300(options.qualityEvidence);
+    const dpi = requestedDpi === 200 ? 200 : (requestedDpi === 300 || verified ? 300 : DEFAULT_DPI);
     const explicitEdge = Number.isFinite(options.targetLongEdge) && options.targetLongEdge > 0;
     // Legacy preview/diagnostic callers keep their explicit dimensions; production uses the physical DPI cap.
     const optimized = options.optimize !== false && !explicitEdge;
@@ -79,7 +80,7 @@
     return { targetLongEdge: Math.max(natural.width, natural.height) * outputScale,
       dpi, effectiveDpi, pixelWidth, pixelHeight, sourceWidth: natural.width, sourceHeight: natural.height,
       limited: scale < 1, optimized, quality: { lowResolution, warnings, detailAssessment: 'unverified',
-        dpiSelection: Number(options.dpi) === 300 ? 'explicit' : verified ? 'verified-text-sampling' : 'safety' } };
+        dpiSelection: requestedDpi === 200 || requestedDpi === 300 ? 'explicit' : verified ? 'verified-text-sampling' : 'safety' } };
   }
 
   function dpiStatus(effectiveDpi, documentType) {

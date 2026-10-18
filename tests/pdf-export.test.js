@@ -178,6 +178,17 @@ async function main() {
   assert.strictEqual(native300Parts[0].dpi, 300);
   assert.strictEqual(test.encodings.length, 0);
 
+  test = harness();
+  const economy200 = await test.api.exportPdfParts([
+    { type: 'document', canvas: test.canvas(7000, 5000, 'economy-200') }
+  ], { dpiOverride: 200 });
+  assert.strictEqual(economy200[0].dpi, 200);
+  test.placements.forEach(page => {
+    assert(page.image.pixelWidth <= page.width / 25.4 * 200 + 1e-8);
+    assert(page.image.pixelHeight <= page.height / 25.4 * 200 + 1e-8);
+  });
+  assertReleased(test);
+
   test = harness({ imageBytes: value => value.quality >= .92 ? 5000000 : (value.quality === .90 ? 3500000 : 2800000) });
   const adaptive = await test.api.exportPdfParts([{ type: 'document', canvas: test.canvas(7000, 5000, 'adaptive') }],
     { dpiOverride: 300, targetBytesPerFile: 3000000, softMaxBytes: 3500000, minimumQuality: .88 });
@@ -356,7 +367,7 @@ async function main() {
   ])));
   assert.deepStrictEqual(simultaneous.map(result => inspectPart(result[0])), [['session-a'], ['session-b']]);
   assertReleased(test);
-  console.log('PASS: canonical JPEG reuse without decode/re-encode, async JPEG bytes, linear PDF assembly, bounded/revision cache, Blob lifecycle, 300/400 dpi, exact 10 MB split/retries and isolated exports');
+  console.log('PASS: canonical JPEG reuse without decode/re-encode, async JPEG bytes, linear PDF assembly, bounded/revision cache, Blob lifecycle, 200/300/400 dpi, exact 10 MB split/retries and isolated exports');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

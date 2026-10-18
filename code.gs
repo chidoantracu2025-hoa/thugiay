@@ -97,7 +97,7 @@ function sanitizePerformanceLog(payload) {
     exportMs: safePerformanceNumber(payload && payload.exportMs),
     requestMs: safePerformanceNumber(payload && payload.requestMs),
     totalMs: safePerformanceNumber(payload && payload.totalMs),
-    outputDpi: Number(payload && payload.outputDpi) === 300 ? 300 : (Number(payload && payload.outputDpi) === 400 ? 400 : 0),
+    outputDpi: Number(payload && payload.outputDpi) === 200 ? 200 : (Number(payload && payload.outputDpi) === 300 ? 300 : (Number(payload && payload.outputDpi) === 400 ? 400 : 0)),
     serverTiming: timing ? {
       validationMs: safePerformanceNumber(timing.validationMs), driveMs: safePerformanceNumber(timing.driveMs),
       sheetMs: safePerformanceNumber(timing.sheetMs), totalMs: safePerformanceNumber(timing.totalMs)

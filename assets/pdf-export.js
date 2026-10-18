@@ -22,10 +22,11 @@
   }
 
   function targetDpi(item, override) {
+    if (Number(override) === 200) return 200;
     if (Number(override) === 300) return 300;
     if (Number(override) === 400) return 400;
     const value = Number(item && (item.dpi || item.processingQuality && item.processingQuality.dpi || item.processedDpi));
-    return value === 300 ? 300 : TARGET_DPI;
+    return value === 200 ? 200 : value === 300 ? 300 : TARGET_DPI;
   }
 
   function createImagePreparation(source, maxWidthMm, maxHeightMm, dpi, asynchronous) {
@@ -74,7 +75,8 @@
 
   // Compatibility helper; saving uses asynchronous Blob encoding below.
   function prepareImage(source, maxWidthMm, maxHeightMm, quality, dpi) {
-    const prepared = createImagePreparation(source, maxWidthMm, maxHeightMm, dpi === 300 ? 300 : TARGET_DPI, false);
+    const outputDpi = Number(dpi) === 200 ? 200 : Number(dpi) === 300 ? 300 : TARGET_DPI;
+    const prepared = createImagePreparation(source, maxWidthMm, maxHeightMm, outputDpi, false);
     try { return encodeImage(prepared, quality === undefined ? QUALITY_STEPS[0] : quality); }
     finally { releaseCanvas(prepared.canvas); }
   }
