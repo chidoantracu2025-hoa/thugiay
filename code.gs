@@ -140,6 +140,24 @@ function writePerformanceLogToGitHub(payload) {
   return status === 201 ? { success: true } : { success: false, error: 'GitHub HTTP ' + status };
 }
 
+// Run this once from the Apps Script editor after configuring Script Properties.
+// Google will request the external-request permission needed by UrlFetchApp.
+function authorizeGitHubPerformanceLogging() {
+  const properties = PropertiesService.getScriptProperties();
+  const githubToken = normalizeValue(properties.getProperty('GITHUB_LOG_TOKEN'));
+  const repository = normalizeValue(properties.getProperty('GITHUB_LOG_REPOSITORY')) || 'chidoantracu2025-hoa/thugiay';
+  if (!githubToken) throw new Error('Chưa cấu hình GITHUB_LOG_TOKEN trong Script Properties.');
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('GITHUB_LOG_REPOSITORY không hợp lệ.');
+  const response = UrlFetchApp.fetch('https://api.github.com/repos/' + repository, {
+    method: 'get', muteHttpExceptions: true,
+    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + githubToken,
+      'X-GitHub-Api-Version': '2022-11-28' }
+  });
+  const status = response.getResponseCode();
+  if (status !== 200) throw new Error('Không kết nối được repository GitHub. HTTP ' + status);
+  return { success: true, repository: repository, message: 'Đã cấp quyền và kết nối GitHub thành công.' };
+}
+
 function withScriptLock(callback, flushSpreadsheet) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);

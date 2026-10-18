@@ -163,3 +163,5 @@ no requests to Google Sheets.
 ## GitHub performance logs
 
 Save timing is dispatched in the background through the deployed Apps Script and is not stored in the browser. Configure these Apps Script properties: `GITHUB_LOG_TOKEN` (fine-grained token restricted to this repository with Contents read/write), `GITHUB_LOG_REPOSITORY` (defaults to `chidoantracu2025-hoa/thugiay`), `GITHUB_LOG_BRANCH` (defaults to `main`) and `GITHUB_LOG_PATH_PREFIX` (defaults to `performance-logs`). Prefer a dedicated existing log branch so log commits do not trigger main-branch deployment workflows. Never put the token in an HTML file or commit it. Logging is best effort and never changes the record-save result.
+
+After configuring the properties, select and run `authorizeGitHubPerformanceLogging` once in the Apps Script editor, approve the external-request permission, then deploy a new Web App version. The function performs a read-only repository check. Without this authorization Google rejects `UrlFetchApp.fetch` with the missing `script.external_request` scope before GitHub is contacted.

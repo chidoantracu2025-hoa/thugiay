@@ -128,7 +128,7 @@ function fixture(options) {
     UrlFetchApp: {
       fetch: function (url, options) {
         test.githubCalls.push({ url: url, options: options });
-        return { getResponseCode: function () { return 201; } };
+        return { getResponseCode: function () { return options.method === 'get' ? 200 : 201; } };
       }
     },
     SpreadsheetApp: {
@@ -833,6 +833,9 @@ function retryPayload(overrides) {
   const test = fixture();
   test.properties.GITHUB_LOG_TOKEN = 'server-secret-token';
   test.properties.GITHUB_LOG_REPOSITORY = 'owner/repository';
+  assert.strictEqual(test.server.authorizeGitHubPerformanceLogging().success, true);
+  assert.strictEqual(test.githubCalls.length, 1);
+  test.githubCalls.length = 0;
   const saved = test.server.saveScanRecord({ hoTenCSD: 'Private owner', pageCount: 0 });
   assert(/^[A-Za-z0-9_-]{20,100}$/.test(saved.performanceLogToken));
   const payload = { logToken: saved.performanceLogToken, page: 'HamGiang', eventId: 'event_0123456789012345',

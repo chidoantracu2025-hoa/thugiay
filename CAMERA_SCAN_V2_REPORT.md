@@ -143,6 +143,12 @@ Cấu hình trong **Apps Script → Project Settings → Script Properties**:
 - `GITHUB_LOG_BRANCH`: mặc định `main`; nên dùng nhánh log riêng đã tạo sẵn.
 - `GITHUB_LOG_PATH_PREFIX`: mặc định `performance-logs`.
 
+Sau khi đặt properties, chạy thủ công `authorizeGitHubPerformanceLogging` một lần trong Apps Script Editor, chấp nhận quyền gọi dịch vụ ngoài rồi triển khai Web App phiên bản mới. Hàm chỉ đọc thông tin repository để kiểm tra token và cấp scope; không tạo log hoặc sửa repository.
+
 Không đặt token trong HTML hoặc commit token vào repository. Nếu thiếu cấu hình, token hết hạn, mất mạng hoặc GitHub lỗi, hồ sơ vẫn được lưu bình thường và chỉ sự kiện log đó bị mất. Các lỗi xảy ra trước khi server hoàn tất `SAVE_SCAN` không có mã dùng một lần nên không được gửi lên GitHub.
 
 Để đánh giá thực tế, nên thu ít nhất 5 lần cho mỗi nhóm: chỉ metadata, chỉ CCCD, GCN 1–3 trang và hồ sơ phải chia PDF; sau đó tính trung vị và p95. Nếu `exportMs` cao, điểm nghẽn ở tạo/nén PDF. Nếu `requestMs` cao nhưng `serverTiming.totalMs` thấp, điểm nghẽn chủ yếu ở mạng/Base64. Nếu `driveMs` cao, điểm nghẽn ở Drive; nếu `sheetMs` cao, cần kiểm tra khóa hoặc thao tác Sheet.
+
+Kiểm thử Web App thật ngày 2026-10-18 lần đầu: `SAVE_SCAN` không PDF thành công tại dòng Sheet 12289 trong 3,740 giây phía máy gọi; server báo tổng 1,239 giây, gồm validation 0,653 giây, Drive 0 giây và Sheet 0,586 giây. `LOG_PERFORMANCE` bị Google từ chối vì deployment chưa cấp scope `script.external_request`; lần này không tạo file GitHub.
+
+Sau khi cấp quyền và triển khai lại, lần kiểm thử thứ hai thành công tại dòng Sheet 12290: tổng phía máy gọi 3,870 giây; server 1,337 giây, gồm validation 0,708 giây, Drive 0 giây và Sheet 0,629 giây. Apps Script ghi thành công file `performance-logs/2026-10-18/20261018T070909737Z_HamGiang_field_retest_20261018_002.json` trên nhánh `main`. Nội dung tải lại từ GitHub khớp toàn bộ timing; các giá trị thử ở trường họ tên, CCCD, OCR, API URL và token không xuất hiện. Gửi lại cùng mã log bị từ chối đúng thiết kế, xác nhận mã chỉ dùng một lần.
