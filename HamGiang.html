@@ -604,6 +604,7 @@
         update: Boolean(entry.update), documentPages: Number(entry.documentPages || 0), cccdPages: Number(entry.cccdPages || 0),
         pdfBytesSent: Number(entry.pdfBytesSent || 0), exportMs: Number(entry.exportMs || 0),
         requestMs: Number(entry.requestMs || 0), totalMs: Number(entry.totalMs || 0),
+        outputDpi: Number(entry.outputDpi) === 300 ? 300 : (Number(entry.outputDpi) === 400 ? 400 : 0),
         serverTiming: entry.serverTiming && typeof entry.serverTiming === 'object' ? {
           validationMs: Number(entry.serverTiming.validationMs || 0), driveMs: Number(entry.serverTiming.driveMs || 0),
           sheetMs: Number(entry.serverTiming.sheetMs || 0), totalMs: Number(entry.serverTiming.totalMs || 0)
@@ -809,26 +810,40 @@
       try { return JSON.parse(text); } catch (e) { return null; }
     }
 
-    async function apiRequest(action, payload, requestUrl) {
+    async function apiRequest(action, payload, requestUrl, requestOptions = {}) {
       const url = requestUrl === undefined ? getApiUrl() : requestUrl;
       if (!url) throw new Error('Vui lòng nhập Web App URL trước khi thao tác.');
+      const timeoutMs = Number(requestOptions.timeoutMs);
+      const controller = Number.isFinite(timeoutMs) && timeoutMs > 0 && typeof AbortController === 'function'
+        ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0;
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: JSON.stringify({ action, payload }),
+          signal: controller ? controller.signal : undefined
+        });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: JSON.stringify({ action, payload })
-      });
-
-      const raw = await response.text();
-      const data = safeJsonParse(raw);
-      if (!response.ok || !data || data.success !== true) {
-        const error = new Error(data && data.error || `Request ${action} thất bại hoặc máy chủ chưa trả kết quả hợp lệ.`);
-        error.code = data && data.code;
-        error.retryAfterMs = data && data.retryAfterMs;
+        const raw = await response.text();
+        const data = safeJsonParse(raw);
+        if (!response.ok || !data || data.success !== true) {
+          const error = new Error(data && data.error || `Request ${action} thất bại hoặc máy chủ chưa trả kết quả hợp lệ.`);
+          error.code = data && data.code;
+          error.retryAfterMs = data && data.retryAfterMs;
+          throw error;
+        }
+        return data;
+      } catch (error) {
+        if (controller && controller.signal.aborted) {
+          const timeoutError = new Error('Quá 40 giây chưa nhận được kết quả. Ảnh vẫn được giữ; hãy bấm Cập nhật / lưu tiếp để kiểm tra và hoàn tất.');
+          timeoutError.code = 'SAVE_TIME_LIMIT';
+          throw timeoutError;
+        }
         throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-
-      return data;
     }
 
     async function testApiConnection() {
@@ -2252,23 +2267,42 @@
       return parts[0].dataUri;
     }
 
-    async function buildPdfParts(scans, original = false) {
+    function chooseAdaptiveSaveDpi() {
+      const configured = Number(state.qualityDpi) === 300 ? 300 : 400;
+      if (configured === 300 || state.captureProfile === 'quality') return configured;
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+      const type = String(connection.effectiveType || '').toLowerCase();
+      const downlink = Number(connection.downlink || 0);
+      return type === 'slow-2g' || type === '2g' || type === '3g' || (downlink > 0 && downlink <= 2) ? 300 : 400;
+    }
+
+    async function buildPdfParts(scans, original = false, exportOptions = {}) {
+      const requestedDpi = Number(exportOptions.dpiOverride);
+      const dpiOverride = requestedDpi === 300 || requestedDpi === 400 ? requestedDpi : undefined;
+      const cccdOnly = !original && scans.every(item => String(item.type || '').indexOf('cccd-') === 0);
+      const profile = original
+        ? { label: 'bản sao', targetBytesPerFile: 2500000, softMaxBytes: 3500000, minimumQuality: .82 }
+        : cccdOnly
+          ? { label: 'CCCD', targetBytesPerFile: 700000, softMaxBytes: 900000, minimumQuality: .88 }
+          : { label: 'GCN', targetBytesPerFile: 3000000, softMaxBytes: 3500000, minimumQuality: .85 };
       const produce = () => window.DocumentPdfExporter.exportPdfParts(scans, {
-        original,
+        original, dpiOverride, targetBytesPerFile: profile.targetBytesPerFile,
+        softMaxBytes: profile.softMaxBytes, minimumQuality: profile.minimumQuality,
         loadSource: (item, isOriginal) => window.ScanRuntime.loadSource(item, isOriginal),
         onProgress: progress => {
-          if (state.saving && progress.stage === 'encode') setStatus(`Đang tạo PDF ${original ? 'bản sao' : 'GCN / CCCD'}: trang ${progress.pageIndex}/${progress.totalPages}...`, 'normal');
+          if (state.saving && progress.stage === 'encode') setStatus(`Đang tạo PDF ${profile.label} ${dpiOverride || 'theo ảnh'} dpi: trang ${progress.pageIndex}/${progress.totalPages}...`, 'normal');
         }
       });
-      return window.ScanRuntime.cachedPdf(state, scans, original, produce);
+      return window.ScanRuntime.cachedPdf(state, scans, original, produce,
+        `${dpiOverride || 'source'}:${profile.targetBytesPerFile}:${profile.softMaxBytes}:${profile.minimumQuality}`);
     }
 
-    async function buildPdfFromScans(scans) {
-      return buildPdfParts(scans);
+    async function buildPdfFromScans(scans, exportOptions) {
+      return buildPdfParts(scans, false, exportOptions);
     }
 
-    async function buildOriginalBackupPdf(scans) {
-      return buildPdfParts(scans, true);
+    async function buildOriginalBackupPdf(scans, exportOptions) {
+      return buildPdfParts(scans, true, exportOptions);
     }
 
     function pdfUploadFields(parts, fileName, singleKey, partsKey) {
@@ -2471,11 +2505,15 @@
           attempt.uncertain = false;
         }
         const prepared = {};
+        const exportDpi = attempt.exportDpi || (attempt.exportDpi = chooseAdaptiveSaveDpi());
+        if (exportDpi === 300 && Number(state.qualityDpi) !== 300) setStatus('Mạng yếu: tự động tạo PDF 300 dpi để giảm thời gian lưu; ảnh nguồn vẫn được giữ.', 'normal');
         const exportStart = performance.now();
         // Stage every needed group before the first write; acknowledged or unchanged PDFs are omitted.
         for (const kind of ['original', 'gcn', 'cccd']) {
           if (!attempt.plannedKeys[kind] || (attempt.retrySupported && attempt.acknowledged[kind] === attempt.plannedKeys[kind])) continue;
-          prepared[kind] = kind === 'original' ? await buildOriginalBackupPdf(attempt.groups[kind]) : await buildPdfFromScans(attempt.groups[kind]);
+          prepared[kind] = kind === 'original'
+            ? await buildOriginalBackupPdf(attempt.groups[kind], { dpiOverride: exportDpi })
+            : await buildPdfFromScans(attempt.groups[kind], { dpiOverride: exportDpi });
         }
         const upload = { ...attempt.payload, saveRequestId: attempt.id, pdfGroupKeys: { ...attempt.plannedKeys } };
         if (!attempt.retrySupported && attempt.savedRowIndex >= 2) upload.rowIndex = attempt.savedRowIndex;
@@ -2491,8 +2529,14 @@
         }
         setStatus('Camera đang nghỉ; đang lưu PDF lên Google...', 'normal');
         const uploadStart = performance.now();
+        const remainingSaveMs = Math.floor(40000 - (performance.now() - startTime));
+        if (remainingSaveMs < 1000) {
+          const limitError = new Error('Chuẩn bị PDF đã gần 40 giây. Chưa gửi dữ liệu; ảnh vẫn được giữ để bấm Cập nhật / lưu tiếp.');
+          limitError.code = 'SAVE_TIME_LIMIT';
+          throw limitError;
+        }
         sending = true;
-        const result = await apiRequest('SAVE_SCAN', upload, requestUrl);
+        const result = await apiRequest('SAVE_SCAN', upload, requestUrl, { timeoutMs: remainingSaveMs });
         sending = false;
         state.lastSaveTiming = { exportMs: uploadStart - exportStart, uploadMs: performance.now() - uploadStart,
           totalMs: performance.now() - startTime,
@@ -2501,15 +2545,17 @@
           update: state.selectedRowIndex >= 2, documentPages: documentPages.length, cccdPages: cccdPhotos.length,
           pdfBytesSent: state.lastSaveTiming.pdfBytesSent, exportMs: state.lastSaveTiming.exportMs,
           requestMs: state.lastSaveTiming.uploadMs, totalMs: state.lastSaveTiming.totalMs,
-          serverTiming: result.serverTiming, performanceLogToken: result.performanceLogToken });
+          serverTiming: result.serverTiming, outputDpi: exportDpi, performanceLogToken: result.performanceLogToken });
         applySaveResult(attempt, result);
       } catch (error) {
         if (attempt && sending) attempt.uncertain = true;
         appendSavePerformanceLog({ result: 'error', errorCode: error.code || 'UNCLASSIFIED',
           update: state.selectedRowIndex >= 2, documentPages: state.documentPages.length,
           cccdPages: state.cccdPhotos.length, totalMs: performance.now() - startTime });
+        document.getElementById('btnSaveRecord').textContent = 'Cập nhật / lưu tiếp';
         alert('Chưa lưu hoàn tất: ' + error.message);
-        setStatus(error.code === 'SAVE_IN_PROGRESS' ? error.message : 'Lưu chưa hoàn tất; ảnh vẫn được giữ để thử lại.', 'error');
+        setStatus(error.code === 'SAVE_IN_PROGRESS' || error.code === 'SAVE_TIME_LIMIT'
+          ? error.message : 'Lưu chưa hoàn tất; ảnh vẫn được giữ để thử lại.', 'error');
       } finally {
         state.saving = false;
         document.getElementById('btnSaveRecord').disabled = false;

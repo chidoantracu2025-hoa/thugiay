@@ -41,11 +41,13 @@ function fixture(html, options) {
   const documents = options.noImages || options.onlyCards ? [] : [image('document-1', 'document')];
   const cards = options.noImages ? [] : [image('front-1', 'cccd-front'), image('back-1', 'cccd-back')];
   const state = { documentPages: documents, cccdPhotos: cards, selectedRowIndex: options.rowIndex || null,
-    saving: false, processing: false, stream: options.cameraOpen ? {} : null };
+    saving: false, processing: false, stream: options.cameraOpen ? {} : null,
+    qualityDpi: options.qualityDpi || 400, captureProfile: options.captureProfile || 'fast' };
   const test = { nodes: nodes, state: state, exports: [], calls: [], alerts: [], statuses: [], renders: [],
     performanceLogs: [], noteSaves: 0, cameraStops: 0 };
   const plans = options.plans || [[part('original')], [part('gcn')], [part('cccd')]];
   let identifier = 0, tick = 0;
+  test.advanceTime = function (milliseconds) { tick += milliseconds; };
   const context = vm.createContext({
     state: state, identityQueue: Promise.resolve(), performance: { now: function () { return ++tick; } },
     scanSessionId: 'scan_session_0123456789',
@@ -55,7 +57,9 @@ function fixture(html, options) {
       MAX_PDF_BYTES: MAX_BYTES,
       exportPdfParts: async function (scans, exportOptions) {
         const index = test.exports.length;
-        test.exports.push({ ids: Array.from(scans).map(function (scan) { return scan.id; }), original: exportOptions.original });
+        test.exports.push({ ids: Array.from(scans).map(function (scan) { return scan.id; }), original: exportOptions.original,
+          dpiOverride: exportOptions.dpiOverride, targetBytesPerFile: exportOptions.targetBytesPerFile,
+          softMaxBytes: exportOptions.softMaxBytes, minimumQuality: exportOptions.minimumQuality });
         assert.strictEqual(typeof exportOptions.loadSource, 'function', 'Exporter must load compressed originals only when needed');
         const loaded = await exportOptions.loadSource(scans[0], exportOptions.original);
         assert.strictEqual(loaded.canvas, exportOptions.original ? scans[0].originalCanvas : scans[0].canvas);
@@ -66,6 +70,7 @@ function fixture(html, options) {
         return result;
       }
     } },
+    navigator: { connection: { effectiveType: options.networkType || '4g', downlink: options.downlink || 10 } },
     getApiUrl: function () { return node('webAppUrl').value; },
     apiRequest: async function (action, payload, url) {
       const call = { action: action, payload: payload, url: url }; test.calls.push(call);
@@ -90,7 +95,7 @@ function fixture(html, options) {
   vm.runInContext([
     'buildPdfParts', 'buildPdfFromScans', 'buildOriginalBackupPdf', 'pdfUploadFields',
     'buildPdfFileName', 'buildCccdPdfFileName', 'buildOriginalBackupFileName', 'buildRecordFileNameParts',
-    'normalizeFileNamePart', 'scanGroupKey', 'makeSaveAttempt', 'applySaveResult', 'saveCurrentRecord'
+    'normalizeFileNamePart', 'scanGroupKey', 'chooseAdaptiveSaveDpi', 'makeSaveAttempt', 'applySaveResult', 'saveCurrentRecord'
   ].map(function (name) { return functionCode(html, name); }).join('\n'), context);
   test.save = context.saveCurrentRecord;
   test.fields = context.pdfUploadFields; test.node = node;
@@ -124,6 +129,10 @@ async function verifyPage(page) {
     assert(/^[A-Za-z0-9_-]{16,100}$/.test(payload.saveRequestId));
     assert.strictEqual(payload.pageCount, 3);
     assert.deepStrictEqual(test.exports.map(function (stage) { return stage.original; }), [true, false, false]);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.dpiOverride; }), [400, 400, 400]);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.targetBytesPerFile; }), [2500000, 3000000, 700000]);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.softMaxBytes; }), [3500000, 3500000, 900000]);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.minimumQuality; }), [.82, .85, .88]);
     assert.deepStrictEqual(test.exports.map(function (stage) { return stage.ids; }), [
       ['document-1', 'front-1', 'back-1'], ['document-1'], ['front-1', 'back-1']
     ]);
@@ -430,7 +439,18 @@ async function verifyPage(page) {
     assert.strictEqual(test.calls.length, 0); assert.strictEqual(test.exports.length, 0); resetAfter(test);
   }
   {
-    const test = fixture(html, { onlyCards: true, plans: [[part('original-cards')], [part('cccd-only')]] });
+    const test = fixture(html, { onExport: function (index, current) {
+      if (index === 0) current.advanceTime(40000);
+    } });
+    await test.save();
+    assert.strictEqual(saves(test).length, 0, 'A save that spends its 40-second budget exporting must not begin an uncertain upload.');
+    assert.strictEqual(test.nodes.btnSaveRecord.textContent, 'Cập nhật / lưu tiếp');
+    assert(test.alerts[0].indexOf('40 giây') >= 0);
+    resetAfter(test); imagesRetained(test);
+  }
+  {
+    const test = fixture(html, { onlyCards: true, networkType: '3g', downlink: 1.45,
+      plans: [[part('original-cards')], [part('cccd-only')]] });
     test.node('soCCCD').value = '012345678901';
     test.node('hoTenCSD').value = 'Chỉ có CCCD';
     await test.save();
@@ -443,6 +463,7 @@ async function verifyPage(page) {
     assert(!has(payload, 'pdfGCNBase64'));
     assert.deepStrictEqual(Object.keys(payload.pdfGroupKeys).sort(), ['cccd', 'original']);
     assert.deepStrictEqual(test.exports.map(function (stage) { return stage.original; }), [true, false]);
+    assert.deepStrictEqual(test.exports.map(function (stage) { return stage.dpiOverride; }), [300, 300]);
     assert.strictEqual(test.performanceLogs[0].result, 'success');
     assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 2000);
     resetAfter(test);
@@ -477,10 +498,33 @@ async function verifyPage(page) {
   }
 }
 
+async function verifyApiTimeout() {
+  const html = fs.readFileSync(path.join(root, 'HamGiang.html'), 'utf8');
+  function Controller() { this.signal = { aborted: false }; }
+  Controller.prototype.abort = function () { this.signal.aborted = true; };
+  const context = vm.createContext({
+    AbortController: Controller,
+    setTimeout: function (callback) { callback(); return 1; }, clearTimeout: function () {},
+    getApiUrl: function () { return ''; }, safeJsonParse: JSON.parse,
+    fetch: async function (url, options) {
+      assert.strictEqual(options.signal.aborted, true);
+      throw new Error('aborted');
+    },
+    Number: Number, JSON: JSON, Error: Error
+  });
+  vm.runInContext(functionCode(html, 'apiRequest'), context);
+  let error;
+  try { await context.apiRequest('SAVE_SCAN', {}, 'https://example.invalid', { timeoutMs: 10 }); }
+  catch (caught) { error = caught; }
+  assert(error && error.code === 'SAVE_TIME_LIMIT');
+  assert(error.message.indexOf('Cập nhật / lưu tiếp') >= 0);
+}
+
 (async function () {
   for (const page of pages) {
     try { await verifyPage(page); }
     catch (error) { error.message = page + ': ' + error.message; throw error; }
   }
+  await verifyApiTimeout();
   console.log('PASS: six-page PDF staging/cache, partial/group retry, lost-response status, legacy same-row fallback, metadata-only updates and camera pause');
 })().catch(function (error) { console.error(error); process.exitCode = 1; });

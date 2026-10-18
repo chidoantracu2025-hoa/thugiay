@@ -154,3 +154,17 @@ Kiểm thử Web App thật ngày 2026-10-18 lần đầu: `SAVE_SCAN` không PD
 Sau khi cấp quyền và triển khai lại, lần kiểm thử thứ hai thành công tại dòng Sheet 12290: tổng phía máy gọi 3,870 giây; server 1,337 giây, gồm validation 0,708 giây, Drive 0 giây và Sheet 0,629 giây. Apps Script ghi thành công file `performance-logs/2026-10-18/20261018T070909737Z_HamGiang_field_retest_20261018_002.json` trên nhánh `main`. Nội dung tải lại từ GitHub khớp toàn bộ timing; các giá trị thử ở trường họ tên, CCCD, OCR, API URL và token không xuất hiện. Gửi lại cùng mã log bị từ chối đúng thiết kế, xác nhận mã chỉ dùng một lần.
 
 Kiểm thử có PDF thật thành công tại dòng Sheet 12291 với một PDF A4 giả lập 300 DPI, một trang, 793.977 byte được gửi cho cả nhóm bản gốc và GCN. Hai file Drive được tạo và mở công khai thành công; kết quả trả `originalBackupSaved: true`, mỗi nhóm một phần và không có nhóm thiếu. Tổng 1.587.954 byte PDF được gửi trong request 2.117.930 byte; thời gian phía máy gọi 13,896 giây. Server xử lý 9,002 giây, gồm validation 0,751 giây, Drive 7,609 giây và Sheet 0,642 giây. Log GitHub được tạo thành công tại `performance-logs/2026-10-18/20261018T071342251Z_HamGiang_field_pdf_test_20261018_003.json`; tải lại xác nhận đúng dung lượng/timing và không có dữ liệu riêng tư thử nghiệm.
+
+## 13. Adaptive PDF 300/400 DPI và mục tiêu dung lượng
+
+Từ log thực tế 2 trang ngày 2026-10-18 (15,32 MiB PDF, tổng 65,88 giây, mạng 3G), luồng lưu đã được cập nhật để giảm dữ liệu trước khi upload:
+
+- Chế độ nhanh tự xuất 300 DPI khi Network Information API báo `slow-2g`, `2g`, `3g` hoặc downlink không quá 2 Mbps. Mạng tốt giữ 400 DPI; chế độ ưu tiên chất lượng giữ lựa chọn 400 DPI. Nếu trình duyệt không cung cấp thông tin mạng, cấu hình người dùng được giữ nguyên.
+- Ngân sách tính theo toàn bộ nhóm PDF: GCN 3.000.000 byte, CCCD hai mặt 700.000 byte, bản gốc mục tiêu 2.500.000 byte và giới hạn chia mềm 3.500.000 byte. GCN dùng giới hạn chia mềm 3.500.000 byte; CCCD 900.000 byte.
+- JPEG bắt đầu ở 0,96 và chỉ giảm khi chưa đạt mục tiêu. Sàn chất lượng là 0,85 cho GCN, 0,88 cho CCCD và 0,82 cho bản gốc. Nếu một trang vẫn vượt giới hạn mềm ở mức sàn, trang được giữ nguyên thay vì hạ DPI; các trang khác được tách thành phần có thứ tự.
+- Giới hạn cứng 10 MB mỗi file và cơ chế chia PDF vẫn giữ nguyên.
+- Ảnh nguồn, kích thước pixel dùng cho Quality Gate và bản chụp trước xử lý không bị thay thế. Cache PDF phân biệt DPI/mục tiêu byte để không tái sử dụng nhầm bản 400 DPI khi mạng chuyển sang 300 DPI.
+- DPI thực tế dùng khi xuất được ghi vào log GitHub qua trường `outputDpi`.
+- Tổng thao tác lưu có ngân sách chờ 40 giây trên trình duyệt. Nếu hết thời gian, UI thông báo rõ, giữ ảnh và đổi nút thành **Cập nhật / lưu tiếp**. Request đang chạy được đánh dấu chưa chắc chắn; lần bấm sau gọi `SAVE_STATUS` trước khi gửi lại để tránh tạo file/dòng trùng.
+
+Chưa có log điện thoại thực tế sau thay đổi này, vì vậy mức giảm từ 65,88 giây vẫn là mục tiêu cần đo lại, chưa phải kết quả benchmark đã xác nhận.

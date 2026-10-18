@@ -29,7 +29,7 @@ async function runPage(page) {
   });
   vm.runInContext(loggingSource(html), context);
   const safe = context.appendSavePerformanceLog({ result: 'success', performanceLogToken: 'token_01234567890123456789',
-    pdfBytesSent: 123456, exportMs: 110, requestMs: 220, totalMs: 330,
+    pdfBytesSent: 123456, exportMs: 110, requestMs: 220, totalMs: 330, outputDpi: 300,
     serverTiming: { validationMs: 1, driveMs: 180, sheetMs: 20, totalMs: 201 },
     hoTenCSD: 'Không được gửi', soCCCD: '012345678901', ocrText: 'Nội dung riêng', apiUrl: 'https://secret.invalid' });
   await Promise.resolve();
@@ -39,6 +39,7 @@ async function runPage(page) {
   assert.strictEqual(request.action, 'LOG_PERFORMANCE');
   assert.strictEqual(request.payload.logToken, 'token_01234567890123456789');
   assert.strictEqual(request.payload.page, page.replace('.html', ''));
+  assert.strictEqual(request.payload.outputDpi, 300);
   ['hoTenCSD', 'soCCCD', 'ocrText', 'apiUrl'].forEach(key => assert(!Object.prototype.hasOwnProperty.call(request.payload, key), page + ': leaked ' + key));
   assert(!JSON.stringify(request).includes('Không được gửi'));
   assert(!Object.prototype.hasOwnProperty.call(safe, 'logToken'), 'token must not be retained in returned telemetry');

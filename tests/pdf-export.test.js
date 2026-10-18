@@ -178,6 +178,25 @@ async function main() {
   assert.strictEqual(native300Parts[0].dpi, 300);
   assert.strictEqual(test.encodings.length, 0);
 
+  test = harness({ imageBytes: value => value.quality >= .92 ? 5000000 : (value.quality === .90 ? 3500000 : 2800000) });
+  const adaptive = await test.api.exportPdfParts([{ type: 'document', canvas: test.canvas(7000, 5000, 'adaptive') }],
+    { dpiOverride: 300, targetBytesPerFile: 3000000, softMaxBytes: 3500000, minimumQuality: .88 });
+  assert.strictEqual(adaptive[0].dpi, 300);
+  assert.strictEqual(adaptive[0].quality, .88);
+  assert(adaptive[0].byteLength <= 3000000 + 65536 + 8192);
+  assert.deepStrictEqual(test.encodings.map(value => value.quality), [.96, .94, .92, .90, .88],
+    'Adaptive compression only reaches lower JPEG quality while the page exceeds its byte target.');
+  assert(test.encodings.every(value => value.pixelWidth <= 4961 && value.pixelHeight <= 4961));
+  assertReleased(test);
+
+  test = harness({ imageBytes: () => 600000 });
+  const softSplit = await test.api.exportPdfParts([
+    { type: 'cccd-front', canvas: test.canvas(1200, 760, 'front') },
+    { type: 'cccd-back', canvas: test.canvas(1200, 760, 'back') }
+  ], { dpiOverride: 300, targetBytesPerFile: 700000, softMaxBytes: 900000, minimumQuality: .88 });
+  assert.strictEqual(softSplit.length, 2, 'Pages that cannot meet the CCCD target are split at the soft file limit without reducing DPI.');
+  assert(softSplit.every(part => part.byteLength < 900000));
+
   test = harness();
   let processedLoads = 0, processedReleases = 0;
   const highDpiItem = { type: 'document', canvas: null,
@@ -291,8 +310,8 @@ async function main() {
 
   test = harness({ imageBytes: () => CAP + 100 });
   await rejects(() => test.api.exportPdfParts([{ type: 'document', canvas: test.canvas(9000, 6000, 'too-big') }]),
-    /Trang 1.*10 MB.*400 dpi.*92%/);
-  assert.deepStrictEqual(test.encodings.map(value => value.quality), [0.96, 0.94, 0.92]);
+    /Trang 1.*10 MB.*400 dpi.*88%/);
+  assert.deepStrictEqual(test.encodings.map(value => value.quality), [0.96, 0.94, 0.92, 0.90, 0.88]);
   assertReleased(test);
 
   test = harness();

@@ -4,7 +4,7 @@
 
   const MAX_PDF_BYTES = 10000000;
   const TARGET_DPI = 400;
-  const QUALITY_STEPS = [0.96, 0.94, 0.92];
+  const QUALITY_STEPS = [0.96, 0.94, 0.92, 0.90, 0.88, 0.85, 0.82];
   // JPEG bytes embed directly. Reserve space for PDF metadata, then check the actual final bytes.
   const PDF_BASE_RESERVE = 65536;
   const PDF_PAGE_RESERVE = 8192;
@@ -21,7 +21,9 @@
     canvas.height = 0;
   }
 
-  function targetDpi(item) {
+  function targetDpi(item, override) {
+    if (Number(override) === 300) return 300;
+    if (Number(override) === 400) return 400;
     const value = Number(item && (item.dpi || item.processingQuality && item.processingQuality.dpi || item.processedDpi));
     return value === 300 ? 300 : TARGET_DPI;
   }
@@ -272,16 +274,27 @@
     return { blob, quality, layout, widthMm, heightMm, pixelWidth: width, pixelHeight: height };
   }
 
-  function retryStepAfter(quality) {
-    for (let step = 0; step < QUALITY_STEPS.length; step++) {
-      if (QUALITY_STEPS[step] < quality - 1e-8) return step;
+  function retryStepAfter(quality, qualitySteps) {
+    for (let step = 0; step < qualitySteps.length; step++) {
+      if (qualitySteps[step] < quality - 1e-8) return step;
     }
-    return QUALITY_STEPS.length;
+    return qualitySteps.length;
   }
 
   async function exportPdfParts(scans, options) {
     if (!Array.isArray(scans) || !scans.length) throw new Error('Không có ảnh để tạo PDF.');
     options = options || {};
+    const minimumQuality = Number(options.minimumQuality);
+    const qualityFloor = Number.isFinite(minimumQuality) ? Math.max(.82, Math.min(.96, minimumQuality)) : .88;
+    const qualitySteps = QUALITY_STEPS.filter(function (quality) { return quality >= qualityFloor - 1e-8; });
+    const targetFileBytes = Number(options.targetBytesPerFile);
+    const requestedTarget = Number.isFinite(targetFileBytes) && targetFileBytes >= 300000
+      ? Math.floor(targetFileBytes / scans.length) : Number(options.targetBytesPerPage);
+    const targetBytesPerPage = Number.isFinite(requestedTarget) && requestedTarget >= 150000
+      ? Math.min(MAX_PDF_BYTES, Math.floor(requestedTarget)) : MAX_PDF_BYTES;
+    const requestedSoftMax = Number(options.softMaxBytes);
+    const softMaxBytes = Number.isFinite(requestedSoftMax) && requestedSoftMax >= 300000
+      ? Math.min(MAX_PDF_BYTES, Math.floor(requestedSoftMax)) : MAX_PDF_BYTES;
     const parts = [];
     let currentPages = [];
     function progress(stage, pageIndex, quality) {
@@ -294,7 +307,7 @@
 
     async function createPage(item, index, firstStep, forceExact) {
       if (!item || typeof item !== 'object') throw new Error('Thiếu ảnh để tạo PDF.');
-      const dpi = targetDpi(item);
+      const dpi = targetDpi(item, options.dpiOverride);
       const entry = cacheFor(item, options, dpi);
       let loaded = null;
       let source = null;
@@ -314,19 +327,19 @@
             image.pdfAlias = 'scan_image_' + (++imageClock);
             rememberImage(entry, 'canonical', image);
           }
-          const nextStep = retryStepAfter(canonical.quality);
+          const nextStep = retryStepAfter(canonical.quality, qualitySteps);
           const page = { format: entry.layout.format, orientation: entry.layout.orientation,
             quality: canonical.quality, dpi, image, item, index, step: nextStep - 1 };
-          if (estimatedBytes([page]) < MAX_PDF_BYTES) return page;
-          if (image.byteLength <= MAX_PDF_BYTES) {
+          if (estimatedBytes([page]) < targetBytesPerPage) return page;
+          if (targetBytesPerPage === MAX_PDF_BYTES && image.byteLength <= MAX_PDF_BYTES) {
             progress('assemble', index + 1, canonical.quality);
             const buffer = buildPdfBuffer([page]);
             if (buffer.byteLength <= MAX_PDF_BYTES) { page.singleBuffer = buffer; return page; }
           }
           startStep = nextStep;
         }
-        for (let step = startStep; step < QUALITY_STEPS.length; step++) {
-          const quality = QUALITY_STEPS[step];
+        for (let step = startStep; step < qualitySteps.length; step++) {
+          const quality = qualitySteps[step];
           progress('encode', index + 1, quality);
           let image = cachedImage(entry, quality);
           if (!image) {
@@ -346,7 +359,9 @@
           const sourceQuality = !options.original && item.processedBlob ? Number(item.processedQuality) : 1;
           const actualQuality = sourceQuality > 0 && sourceQuality <= 1 ? Math.min(sourceQuality, quality) : quality;
           const page = { format: layout.format, orientation: layout.orientation, quality: actualQuality, dpi, image, item, index, step };
-          if (forceExact || estimatedBytes([page]) >= MAX_PDF_BYTES) {
+          const estimate = estimatedBytes([page]);
+          if (!forceExact && estimate < targetBytesPerPage) return page;
+          if (forceExact || estimate >= MAX_PDF_BYTES || step === qualitySteps.length - 1) {
             // jsPDF embeds the JPEG stream verbatim. A JPEG already larger than the file cap
             // cannot fit even before PDF metadata, so avoid allocating another oversized PDF.
             if (image.byteLength > MAX_PDF_BYTES) { await yieldToInterface(); continue; }
@@ -354,11 +369,12 @@
             const buffer = buildPdfBuffer([page]);
             if (buffer.byteLength > MAX_PDF_BYTES) { await yieldToInterface(); continue; }
             page.singleBuffer = buffer;
+            return page;
           }
-          return page;
+          await yieldToInterface();
         }
         throw new Error('Trang ' + (index + 1) + ' vẫn vượt 10 MB ở mức tối đa ' + dpi +
-          ' dpi và chất lượng JPEG 92%. Vui lòng chụp lại trang rõ nét, ít nhiễu hoặc chia nội dung thành các ảnh riêng.');
+          ' dpi và chất lượng JPEG ' + Math.round(qualityFloor * 100) + '%. Vui lòng chụp lại trang rõ nét, ít nhiễu hoặc chia nội dung thành các ảnh riêng.');
       } finally {
         if (prepared) releaseCanvas(prepared.canvas);
         if (loaded && typeof loaded.release === 'function') loaded.release();
@@ -370,7 +386,7 @@
       await yieldToInterface();
       progress('assemble', pages[pages.length - 1].index + 1, pages[pages.length - 1].quality);
       let buffer = pages.length === 1 && pages[0].singleBuffer || buildPdfBuffer(pages);
-      if (buffer.byteLength <= MAX_PDF_BYTES) {
+      if (buffer.byteLength <= softMaxBytes || pages.length === 1) {
         parts.push(await makePart(pages, buffer));
         return;
       }
@@ -390,7 +406,7 @@
     for (let index = 0; index < scans.length; index++) {
       await yieldToInterface();
       const page = await createPage(scans[index], index, 0, false);
-      if (currentPages.length && estimatedBytes(currentPages.concat([page])) > MAX_PDF_BYTES) {
+      if (currentPages.length && estimatedBytes(currentPages.concat([page])) > softMaxBytes) {
         await flushPages(currentPages);
         currentPages = [];
       }

@@ -166,8 +166,8 @@
   }
 
   function revisionOf(item) { return item.revision || item.pdfRevision || item.processingRevision || 0; }
-  function sameScans(entry, scans, original) {
-    return entry.original === original && entry.items.length === scans.length &&
+  function sameScans(entry, scans, original, variant) {
+    return entry.original === original && entry.variant === (variant || '') && entry.items.length === scans.length &&
       entry.items.every(function (item, index) {
         const current = scans[index];
         return item === current && entry.revisions[index] === revisionOf(current) &&
@@ -177,9 +177,9 @@
       });
   }
 
-  async function cachedPdf(state, scans, original, produce) {
+  async function cachedPdf(state, scans, original, produce, variant) {
     const entries = state.pdfCache || (state.pdfCache = []);
-    const cached = entries.find(function (entry) { return sameScans(entry, scans, original); });
+    const cached = entries.find(function (entry) { return sameScans(entry, scans, original, variant); });
     if (cached) return cached.parts;
     const parts = await produce();
     const byteLength = parts.reduce(function (sum, part) { return sum + part.byteLength; }, 0);
@@ -189,7 +189,7 @@
         dpis: scans.map(function (item) { return item.dpi || item.processingQuality && item.processingQuality.dpi || item.processedDpi || 400; }),
         types: scans.map(function (item) { return item.type; }),
         sources: scans.map(function (item) { return original ? item.originalBlob || item.originalCanvas : item.processedBlob || item.canvas; }),
-        original, parts, byteLength });
+        original, variant: variant || '', parts, byteLength });
     }
     return parts;
   }

@@ -839,7 +839,8 @@ function retryPayload(overrides) {
   const saved = test.server.saveScanRecord({ hoTenCSD: 'Private owner', pageCount: 0 });
   assert(/^[A-Za-z0-9_-]{20,100}$/.test(saved.performanceLogToken));
   const payload = { logToken: saved.performanceLogToken, page: 'HamGiang', eventId: 'event_0123456789012345',
-    result: 'success', totalMs: 1234, requestMs: 900, hoTenCSD: 'Private owner', soCCCD: '987654321098',
+    result: 'success', totalMs: 1234, requestMs: 900, outputDpi: 300,
+    hoTenCSD: 'Private owner', soCCCD: '987654321098',
     ocrText: 'Private note', apiUrl: 'https://secret.invalid' };
   const logged = test.server.writePerformanceLogToGitHub(payload);
   assert.strictEqual(logged.success, true);
@@ -849,6 +850,7 @@ function retryPayload(overrides) {
   const body = JSON.parse(test.githubCalls[0].options.payload);
   const content = Buffer.from(body.content, 'base64').toString('utf8');
   assert(content.includes('"totalMs": 1234'));
+  assert(content.includes('"outputDpi": 300'));
   ['Private owner', '987654321098', 'Private note', 'secret.invalid', 'server-secret-token'].forEach(function (privateValue) {
     assert(!content.includes(privateValue), 'Private value leaked to GitHub: ' + privateValue);
   });

@@ -333,6 +333,15 @@ async function testPdfCache() {
   let failed = false;
   await expectFailure(() => api.cachedPdf(largeState, [first], false, async () => { failed = true; throw new Error('export failed'); }), /export failed/);
   assert(failed && largeState.pdfCache.length === 0, 'Failed exports never populate the cache.');
+
+  const variantState = {}, variantItem = { canvas: {} };
+  let variantGenerations = 0;
+  const variantProducer = async () => [{ byteLength: 1000, marker: ++variantGenerations }];
+  const dpi400 = await api.cachedPdf(variantState, [variantItem], false, variantProducer, '400:3000000');
+  assert.strictEqual(await api.cachedPdf(variantState, [variantItem], false, variantProducer, '400:3000000'), dpi400);
+  const dpi300 = await api.cachedPdf(variantState, [variantItem], false, variantProducer, '300:3000000');
+  assert.notStrictEqual(dpi300, dpi400, 'Adaptive DPI and byte targets are part of the PDF cache key.');
+  assert.strictEqual(variantGenerations, 2);
 }
 
 (async () => {

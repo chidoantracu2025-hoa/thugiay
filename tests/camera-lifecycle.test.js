@@ -68,6 +68,7 @@ function harness(file) {
     refreshCameras: async () => configuration.cameras,
     armCameraIdle() {}, scanCameraPreview() {}, closeScanReview() {}, renderRecordFiles() {},
     appendSavePerformanceLog() {},
+    chooseAdaptiveSaveDpi() { return 400; },
     waitForCameraFrame: async () => {},
     raiseFallbackCaptureResolution: async () => { configuration.fallbackCalls++; },
     decodeImageFile: async () => {
