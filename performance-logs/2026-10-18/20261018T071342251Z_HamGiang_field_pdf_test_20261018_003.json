@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "receivedAt": "2026-10-18T07:13:42.250Z",
+  "capturedAt": "2026-10-18T07:13:41.194631+00:00",
+  "page": "HamGiang",
+  "eventId": "field_pdf_test_20261018_003",
+  "result": "success",
+  "errorCode": "",
+  "update": false,
+  "documentPages": 1,
+  "cccdPages": 0,
+  "pdfBytesSent": 1587954,
+  "exportMs": 0,
+  "requestMs": 13895.747,
+  "totalMs": 13895.747,
+  "serverTiming": {
+    "validationMs": 751,
+    "driveMs": 7609,
+    "sheetMs": 642,
+    "totalMs": 9002
+  },
+  "network": {
+    "effectiveType": "test-cli",
+    "downlinkMbps": 0,
+    "rttMs": 0
+  },
+  "device": {
+    "memoryGb": 0,
+    "logicalCores": 0
+  }
+}
