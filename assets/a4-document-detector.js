@@ -207,9 +207,14 @@
         } finally { contours.delete(); }
       }
       const bestRatio = best ? polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) : 0;
+      const bestCenterX = best ? best.x + best.width / 2 : sourceCanvas.width / 2;
+      const oneSidedSpread = Boolean(options.preferSpread && best && bestRatio < 0.62 &&
+        Math.abs(bestCenterX - sourceCanvas.width / 2) > sourceCanvas.width * 0.12);
       // Only pay for the extra colour pass when the regular detector did not
-      // find a convincing full document. Preview keeps its original fast path.
-      if (!options.fast && bestRatio < 0.32 && fillBackgroundContrastMask(source, mask)) {
+      // find a convincing full document, or when it found only one side of an
+      // open two-colour certificate. Fast preview uses it only for that clear
+      // one-sided case and remains bounded to the caller's small probe.
+      if (((!options.fast && bestRatio < 0.32) || oneSidedSpread) && fillBackgroundContrastMask(source, mask)) {
         // Remove thin texture/noise paths before closing small gaps inside the
         // paper. Otherwise a woven support surface can connect the paper mask
         // to unrelated objects at the image border.

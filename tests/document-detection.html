@@ -452,7 +452,11 @@
           if (sample === 'test.jpg') {
             const expected = { x: canvas.width * .025, y: canvas.height * .20, width: canvas.width * .97, height: canvas.height * .52 };
             verifyBounds(candidate, expected, .8);
-            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { fast: true, maxDimension: 480 }), expected, .8);
+            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .8);
+          } else if (sample === 'test4.jpg') {
+            const expected = { x: canvas.width * .05, y: canvas.height * .065, width: canvas.width * .91, height: canvas.height * .865 };
+            verifyBounds(candidate, expected, .9);
+            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .9);
           }
           await compareWorker(canvas, options);
           return `detected via ${candidate.method}; worker agrees`;
