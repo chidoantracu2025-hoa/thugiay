@@ -106,8 +106,8 @@ async function processScanRequest(data) {
       if (bounds.corners) {
         const margin = Math.min(...bounds.corners.map(point => Math.min(point.x, point.y, sourceCanvas.width - point.x, sourceCanvas.height - point.y)));
         const shortEdge = Math.min(sourceCanvas.width, sourceCanvas.height);
-        if (margin <= 0) score -= 0.6;
-        else if (margin < shortEdge * 0.003) score -= 0.35;
+        if (margin <= 0) score -= bounds.detectionVariant === 'background-contrast' ? 0.12 : 0.6;
+        else if (margin < shortEdge * 0.003) score -= bounds.detectionVariant === 'background-contrast' ? 0.06 : 0.35;
         else if (margin > shortEdge * 0.01) score += 0.01;
       }
       return score;

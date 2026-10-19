@@ -113,6 +113,15 @@ function assertFullFrameCandidateLoses(file) {
     file + ': the real A3 spread must outrank a contour hugging the full camera frame.');
   assert(context.scoreDocumentBounds(paper, canvas, options) > context.scoreDocumentBounds(topEdgeIntruder, canvas, options),
     file + ': the real A3 spread must outrank a large contour attached to the top image edge.');
+  const clippedPaper = { x: 50, y: 0, width: 1830, height: 1320, method: 'opencv', paperShape: true,
+    paperConfidence: .92, detectionVariant: 'background-contrast', corners: [
+      { x: 60, y: 80 }, { x: 1810, y: 0 }, { x: 1880, y: 1310 }, { x: 50, y: 1320 }
+    ] };
+  const halfPage = { x: 960, y: 50, width: 850, height: 1250, method: 'opencv', corners: [
+    { x: 960, y: 100 }, { x: 1770, y: 50 }, { x: 1810, y: 1300 }, { x: 1000, y: 1290 }
+  ] };
+  assert(context.scoreDocumentBounds(clippedPaper, canvas, options) > context.scoreDocumentBounds(halfPage, canvas, options),
+    file + ': a validated two-page spread clipped at one edge must outrank a single detected half.');
 }
 
 async function assertNativeQuality(file) {

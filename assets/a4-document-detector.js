@@ -91,7 +91,7 @@
   }
 
   // Expand the fitted quad to contain the whole hull, including curled edges.
-  function encloseOutline(corners, outline, width, height, maximumExpansion) {
+  function encloseOutline(corners, outline, width, height, maximumExpansion, clampToFrame) {
     const center = corners.reduce((sum, p) => ({ x: sum.x + p.x / 4, y: sum.y + p.y / 4 }), { x: 0, y: 0 });
     let expansion = 1;
     for (let i = 0; i < 4; i++) {
@@ -104,8 +104,11 @@
     // A large expansion means four corners do not describe this component well.
     if (expansion > (maximumExpansion || 1.08)) return null;
     expansion += 0.008;
-    const padded = corners.map(p => ({ x: center.x + (p.x - center.x) * expansion, y: center.y + (p.y - center.y) * expansion }));
-    if (padded.some(p => p.x < 0 || p.y < 0 || p.x >= width || p.y >= height)) return null;
+    let padded = corners.map(p => ({ x: center.x + (p.x - center.x) * expansion, y: center.y + (p.y - center.y) * expansion }));
+    if (padded.some(p => p.x < 0 || p.y < 0 || p.x >= width || p.y >= height)) {
+      if (!clampToFrame) return null;
+      padded = padded.map(p => ({ x: Math.max(0, Math.min(width - 1, p.x)), y: Math.max(0, Math.min(height - 1, p.y)) }));
+    }
     return padded;
   }
 
@@ -121,14 +124,19 @@
       if (!hullArea || solidity < (damagedPaper ? 0.66 : 0.78)) return null;
       const outline = pointsFromMat(hull);
       const margin = Math.max(2, Math.min(width, height) * 0.006);
-      if (outline.some(p => p.x <= margin || p.y <= margin || p.x >= width - margin || p.y >= height - margin)) return null;
+      const touchedEdges = [
+        outline.some(p => p.x <= margin), outline.some(p => p.y <= margin),
+        outline.some(p => p.x >= width - margin), outline.some(p => p.y >= height - margin)
+      ].filter(Boolean).length;
+      if ((!damagedPaper && touchedEdges) || (damagedPaper && touchedEdges > 1)) return null;
 
       let corners = null;
       const perimeter = cv.arcLength(hull, true);
       for (const epsilon of [0.012, 0.02, 0.035, 0.05, 0.075]) {
         cv.approxPolyDP(hull, polygon, epsilon * perimeter, true);
         if (polygon.rows !== 4 || !cv.isContourConvex(polygon)) continue;
-        corners = encloseOutline(orderCorners(pointsFromMat(polygon)), outline, width, height, damagedPaper ? 1.14 : 1.08);
+        corners = encloseOutline(orderCorners(pointsFromMat(polygon)), outline, width, height,
+          damagedPaper ? 1.14 : 1.08, damagedPaper && touchedEdges === 1);
         if (corners) break;
       }
       if (!corners) {
@@ -140,7 +148,8 @@
           x: rect.center.x + x * rect.size.width * cosine / 2 - y * rect.size.height * sine / 2,
           y: rect.center.y + x * rect.size.width * sine / 2 + y * rect.size.height * cosine / 2
         })));
-        corners = encloseOutline(corners, outline, width, height, damagedPaper ? 1.14 : 1.08);
+        corners = encloseOutline(corners, outline, width, height,
+          damagedPaper ? 1.14 : 1.08, damagedPaper && touchedEdges === 1);
       }
       if (!corners) return null;
       const area = polygonArea(corners);
@@ -214,7 +223,8 @@
       // find a convincing full document, or when it found only one side of an
       // open two-colour certificate. Fast preview uses it only for that clear
       // one-sided case and remains bounded to the caller's small probe.
-      if (((!options.fast && bestRatio < 0.32) || oneSidedSpread) && fillBackgroundContrastMask(source, mask)) {
+      if (((!options.fast && bestRatio < 0.32) || oneSidedSpread || (options.fast && !best)) &&
+          fillBackgroundContrastMask(source, mask)) {
         // Remove thin texture/noise paths before closing small gaps inside the
         // paper. Otherwise a woven support surface can connect the paper mask
         // to unrelated objects at the image border.
