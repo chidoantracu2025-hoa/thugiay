@@ -99,7 +99,8 @@ async function processScanRequest(data) {
       let score = areaRatio * (0.7 + 0.3 * aspectFit);
       score += bounds.corners ? 0.025 : 0;
       score += bounds.method === 'opencv' ? 0.015 : bounds.method === 'jscanify' ? 0.01 : 0;
-      if (areaRatio > 0.82) score -= 0.3;
+      if (areaRatio > 0.88) score -= 1;
+      else if (areaRatio > 0.82) score -= 0.3;
       if (areaRatio < 0.06) score -= 0.2;
       if (options.preferSpread && areaRatio > 0.2 && aspect < 2.2) score += 0.08;
       if (bounds.corners) {

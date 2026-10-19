@@ -95,6 +95,21 @@ function inspectPdfPart(part) {
   return JSON.parse(bytes.slice(0, bytes.indexOf(10)).toString());
 }
 
+function assertFullFrameCandidateLoses(file) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  const context = vm.createContext({});
+  vm.runInContext(functionCode('scoreDocumentBounds', source), context);
+  const canvas = { width: 1920, height: 2560 };
+  const fullFrame = { x: 29, y: 0, width: 1889, height: 2558, method: 'opencv', corners: [
+    { x: 29, y: 0 }, { x: 1917, y: 13 }, { x: 1797, y: 2557 }, { x: 75, y: 2557 }
+  ] };
+  const paper = { x: 46, y: 514, width: 1860, height: 1303, method: 'opencv', paperShape: true,
+    corners: [{ x: 52, y: 523 }, { x: 1890, y: 514 }, { x: 1906, y: 1803 }, { x: 46, y: 1816 }] };
+  const options = { documentType: 'document', preferSpread: true };
+  assert(context.scoreDocumentBounds(paper, canvas, options) > context.scoreDocumentBounds(fullFrame, canvas, options),
+    file + ': the real A3 spread must outrank a contour hugging the full camera frame.');
+}
+
 async function assertNativeQuality(file) {
   const harness = qualityHarness(fs.readFileSync(path.join(root, file), 'utf8'));
   const context = harness.context;
@@ -315,6 +330,7 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
 }
 (async () => {
   for (const file of ['HamGiang.html', 'TraCu.html', 'LongHiep.html', 'TapSon.html', 'LuuNghiepAnh.html', 'DaiAn.html']) {
+    assertFullFrameCandidateLoses(file);
     await assertNativeQuality(file);
     await assertNativeCamera(file);
   }
