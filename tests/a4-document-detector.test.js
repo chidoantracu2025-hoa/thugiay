@@ -34,6 +34,30 @@ function image(width, height, pixel) {
   assert.strictEqual(mask.data[50 * width + 110], 255, 'The red half of the same document is retained.');
 }
 
+[
+  { name: 'blue support', background: (x, y) => [24 + x % 10, 82 + y % 15, 158 + x % 17] },
+  { name: 'green woven support', background: (x, y) => [20 + x % 13, 112 + y % 21, 51 + x % 11] }
+].forEach(test => {
+  const width = 180, height = 140;
+  const sourceImage = image(width, height, (x, y) => {
+    const left = 24 + Math.floor(y / 35);
+    const right = 158 - Math.floor(y / 45);
+    const inside = y >= 20 && y < 122 && x >= left && x < right;
+    if (!inside) return test.background(x, y);
+    // Model an old spread with two paper colours, tears and small holes.
+    if ((x > 84 && x < 90 && y > 50 && y < 76) || (x > 120 && x < 126 && y > 92 && y < 99)) {
+      return test.background(x, y);
+    }
+    return x < 90 ? [226 - y % 9, 218 - y % 7, 187 - y % 5] : [196 + y % 12, 34, 48];
+  });
+  const mask = { data: new Uint8Array(width * height) };
+  assert.strictEqual(detector.fillBackgroundContrastMask(sourceImage, mask), true, test.name);
+  assert.strictEqual(mask.data[8 * width + 8], 0, test.name + ' is removed');
+  assert.strictEqual(mask.data[45 * width + 50], 255, test.name + ' keeps aged white paper');
+  assert.strictEqual(mask.data[45 * width + 130], 255, test.name + ' keeps the red cover');
+  assert.strictEqual(mask.data[60 * width + 86], 0, test.name + ' leaves a real tear available for morphology cleanup');
+});
+
 {
   const sourceImage = image(80, 60, () => [180, 180, 180]);
   const mask = { data: new Uint8Array(80 * 60) };
@@ -41,4 +65,4 @@ function image(width, height, pixel) {
     'A neutral border does not trigger the coloured-background fallback.');
 }
 
-console.log('A4/A3 detector: mixed white/red paper is retained over a coloured support surface.');
+console.log('A4/A3 detector: mixed, aged and torn paper is retained over blue/green support surfaces.');

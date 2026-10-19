@@ -91,7 +91,7 @@
   }
 
   // Expand the fitted quad to contain the whole hull, including curled edges.
-  function encloseOutline(corners, outline, width, height) {
+  function encloseOutline(corners, outline, width, height, maximumExpansion) {
     const center = corners.reduce((sum, p) => ({ x: sum.x + p.x / 4, y: sum.y + p.y / 4 }), { x: 0, y: 0 });
     let expansion = 1;
     for (let i = 0; i < 4; i++) {
@@ -102,14 +102,14 @@
       for (const p of outline) expansion = Math.max(expansion, (nx * (p.x - center.x) + ny * (p.y - center.y)) / radius);
     }
     // A large expansion means four corners do not describe this component well.
-    if (expansion > 1.08) return null;
+    if (expansion > (maximumExpansion || 1.08)) return null;
     expansion += 0.008;
     const padded = corners.map(p => ({ x: center.x + (p.x - center.x) * expansion, y: center.y + (p.y - center.y) * expansion }));
     if (padded.some(p => p.x < 0 || p.y < 0 || p.x >= width || p.y >= height)) return null;
     return padded;
   }
 
-  function fitOutline(cv, contour, width, height, sourceCanvas, scale) {
+  function fitOutline(cv, contour, width, height, sourceCanvas, scale, damagedPaper) {
     const contourArea = Math.abs(cv.contourArea(contour));
     if (contourArea < width * height * 0.055 || contourArea > width * height * 0.88) return null;
     const hull = new cv.Mat();
@@ -117,7 +117,8 @@
     try {
       cv.convexHull(contour, hull, false, true);
       const hullArea = Math.abs(cv.contourArea(hull));
-      if (!hullArea || contourArea / hullArea < 0.78) return null;
+      const solidity = hullArea ? contourArea / hullArea : 0;
+      if (!hullArea || solidity < (damagedPaper ? 0.66 : 0.78)) return null;
       const outline = pointsFromMat(hull);
       const margin = Math.max(2, Math.min(width, height) * 0.006);
       if (outline.some(p => p.x <= margin || p.y <= margin || p.x >= width - margin || p.y >= height - margin)) return null;
@@ -127,7 +128,7 @@
       for (const epsilon of [0.012, 0.02, 0.035, 0.05, 0.075]) {
         cv.approxPolyDP(hull, polygon, epsilon * perimeter, true);
         if (polygon.rows !== 4 || !cv.isContourConvex(polygon)) continue;
-        corners = encloseOutline(orderCorners(pointsFromMat(polygon)), outline, width, height);
+        corners = encloseOutline(orderCorners(pointsFromMat(polygon)), outline, width, height, damagedPaper ? 1.14 : 1.08);
         if (corners) break;
       }
       if (!corners) {
@@ -139,12 +140,12 @@
           x: rect.center.x + x * rect.size.width * cosine / 2 - y * rect.size.height * sine / 2,
           y: rect.center.y + x * rect.size.width * sine / 2 + y * rect.size.height * cosine / 2
         })));
-        corners = encloseOutline(corners, outline, width, height);
+        corners = encloseOutline(corners, outline, width, height, damagedPaper ? 1.14 : 1.08);
       }
       if (!corners) return null;
       const area = polygonArea(corners);
       const fill = contourArea / area;
-      if (fill < 0.76 || area > width * height * 0.9) return null;
+      if (fill < (damagedPaper ? 0.68 : 0.76) || area > width * height * 0.9) return null;
       const sides = corners.map((p, i) => Math.hypot(p.x - corners[(i + 1) % 4].x, p.y - corners[(i + 1) % 4].y));
       const paperWidth = (sides[0] + sides[2]) / 2;
       const paperHeight = (sides[1] + sides[3]) / 2;
@@ -157,7 +158,8 @@
       const right = Math.min(sourceCanvas.width, Math.ceil(Math.max(...scaled.map(p => p.x))));
       const bottom = Math.min(sourceCanvas.height, Math.ceil(Math.max(...scaled.map(p => p.y))));
       return { x, y, width: right - x, height: bottom - y, corners: scaled, detected: true,
-        method: 'opencv', paperShape: true, paperConfidence: fill * Math.exp(-Math.abs(Math.log(aspect / Math.SQRT2))) };
+        method: 'opencv', paperShape: true,
+        paperConfidence: Math.min(fill, solidity) * Math.exp(-Math.abs(Math.log(aspect / Math.SQRT2))) };
     } finally {
       hull.delete();
       polygon.delete();
@@ -219,7 +221,7 @@
           for (let i = 0; i < contours.size(); i++) {
             const contour = contours.get(i);
             try {
-              const candidate = fitOutline(cv, contour, width, height, sourceCanvas, scale);
+              const candidate = fitOutline(cv, contour, width, height, sourceCanvas, scale, true);
               if (!candidate) continue;
               candidate.method = 'opencv';
               candidate.detectionVariant = 'background-contrast';
