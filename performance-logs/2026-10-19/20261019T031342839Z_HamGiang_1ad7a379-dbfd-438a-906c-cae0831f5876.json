@@ -1,0 +1,32 @@
+{
+  "version": 3,
+  "receivedAt": "2026-10-19T03:13:42.836Z",
+  "capturedAt": "2026-10-19T03:13:42.754Z",
+  "page": "HamGiang",
+  "eventId": "1ad7a379-dbfd-438a-906c-cae0831f5876",
+  "result": "success",
+  "errorCode": "",
+  "update": false,
+  "documentPages": 2,
+  "cccdPages": 0,
+  "pdfBytesSent": 6045105,
+  "exportMs": 169996.5,
+  "requestMs": 16292.39999999106,
+  "totalMs": 186292.19999998808,
+  "outputDpi": 400,
+  "serverTiming": {
+    "validationMs": 664,
+    "driveMs": 9540,
+    "sheetMs": 519,
+    "totalMs": 10723
+  },
+  "network": {
+    "effectiveType": "4g",
+    "downlinkMbps": 10,
+    "rttMs": 0
+  },
+  "device": {
+    "memoryGb": 4,
+    "logicalCores": 8
+  }
+}
