@@ -105,9 +105,14 @@ function assertFullFrameCandidateLoses(file) {
   ] };
   const paper = { x: 46, y: 514, width: 1860, height: 1303, method: 'opencv', paperShape: true,
     corners: [{ x: 52, y: 523 }, { x: 1890, y: 514 }, { x: 1906, y: 1803 }, { x: 46, y: 1816 }] };
+  const topEdgeIntruder = { x: 69, y: 0, width: 1849, height: 1867, method: 'opencv', corners: [
+    { x: 101, y: 0 }, { x: 1653, y: 197 }, { x: 1917, y: 1867 }, { x: 69, y: 1704 }
+  ] };
   const options = { documentType: 'document', preferSpread: true };
   assert(context.scoreDocumentBounds(paper, canvas, options) > context.scoreDocumentBounds(fullFrame, canvas, options),
     file + ': the real A3 spread must outrank a contour hugging the full camera frame.');
+  assert(context.scoreDocumentBounds(paper, canvas, options) > context.scoreDocumentBounds(topEdgeIntruder, canvas, options),
+    file + ': the real A3 spread must outrank a large contour attached to the top image edge.');
 }
 
 async function assertNativeQuality(file) {

@@ -105,7 +105,10 @@ async function processScanRequest(data) {
       if (options.preferSpread && areaRatio > 0.2 && aspect < 2.2) score += 0.08;
       if (bounds.corners) {
         const margin = Math.min(...bounds.corners.map(point => Math.min(point.x, point.y, sourceCanvas.width - point.x, sourceCanvas.height - point.y)));
-        if (margin > Math.min(sourceCanvas.width, sourceCanvas.height) * 0.01) score += 0.01;
+        const shortEdge = Math.min(sourceCanvas.width, sourceCanvas.height);
+        if (margin <= 0) score -= 0.6;
+        else if (margin < shortEdge * 0.003) score -= 0.35;
+        else if (margin > shortEdge * 0.01) score += 0.01;
       }
       return score;
     }
