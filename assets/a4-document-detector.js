@@ -24,6 +24,72 @@
     return points;
   }
 
+  function hueOf(red, green, blue) {
+    const maximum = Math.max(red, green, blue);
+    const minimum = Math.min(red, green, blue);
+    const range = maximum - minimum;
+    if (!range) return 0;
+    let hue = maximum === red ? (green - blue) / range
+      : maximum === green ? 2 + (blue - red) / range
+      : 4 + (red - green) / range;
+    hue /= 6;
+    return hue < 0 ? hue + 1 : hue;
+  }
+
+  function hueDistance(first, second) {
+    const distance = Math.abs(first - second);
+    return Math.min(distance, 1 - distance);
+  }
+
+  // Estimate a coloured support surface from thin image-border samples. This is
+  // useful for mixed-colour documents (for example a white page beside a red
+  // cover), where a brightness-only paper mask can retain just one half.
+  function fillBackgroundContrastMask(source, mask) {
+    if (!source || !source.data || !mask || !mask.data) return false;
+    const width = source.cols;
+    const height = source.rows;
+    const pixels = source.data;
+    const bins = new Uint32Array(24);
+    const saturationSums = new Float64Array(24);
+    const border = Math.max(2, Math.round(Math.min(width, height) * 0.025));
+    let samples = 0;
+    for (let y = 0; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        if (x >= border && x < width - border && y >= border && y < height - border) continue;
+        const offset = (y * width + x) * 4;
+        const red = pixels[offset] / 255;
+        const green = pixels[offset + 1] / 255;
+        const blue = pixels[offset + 2] / 255;
+        const maximum = Math.max(red, green, blue);
+        const minimum = Math.min(red, green, blue);
+        const saturation = maximum ? (maximum - minimum) / maximum : 0;
+        if (saturation < 0.22 || maximum < 0.12) continue;
+        const bin = Math.min(23, Math.floor(hueOf(red, green, blue) * 24));
+        bins[bin]++;
+        saturationSums[bin] += saturation;
+        samples++;
+      }
+    }
+    let dominant = 0;
+    for (let index = 1; index < bins.length; index++) if (bins[index] > bins[dominant]) dominant = index;
+    if (samples < 40 || bins[dominant] < samples * 0.16) return false;
+    const backgroundHue = (dominant + 0.5) / bins.length;
+    const backgroundSaturation = saturationSums[dominant] / bins[dominant];
+    const bits = mask.data;
+    for (let index = 0, offset = 0; index < bits.length; index++, offset += 4) {
+      const red = pixels[offset] / 255;
+      const green = pixels[offset + 1] / 255;
+      const blue = pixels[offset + 2] / 255;
+      const maximum = Math.max(red, green, blue);
+      const minimum = Math.min(red, green, blue);
+      const saturation = maximum ? (maximum - minimum) / maximum : 0;
+      const sameSurface = saturation >= Math.max(0.12, backgroundSaturation * 0.30) &&
+        hueDistance(hueOf(red, green, blue), backgroundHue) <= 0.14;
+      bits[index] = sameSurface ? 0 : 255;
+    }
+    return true;
+  }
+
   // Expand the fitted quad to contain the whole hull, including curled edges.
   function encloseOutline(corners, outline, width, height) {
     const center = corners.reduce((sum, p) => ({ x: sum.x + p.x / 4, y: sum.y + p.y / 4 }), { x: 0, y: 0 });
@@ -138,6 +204,31 @@
           }
         } finally { contours.delete(); }
       }
+      const bestRatio = best ? polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) : 0;
+      // Only pay for the extra colour pass when the regular detector did not
+      // find a convincing full document. Preview keeps its original fast path.
+      if (!options.fast && bestRatio < 0.32 && fillBackgroundContrastMask(source, mask)) {
+        // Remove thin texture/noise paths before closing small gaps inside the
+        // paper. Otherwise a woven support surface can connect the paper mask
+        // to unrelated objects at the image border.
+        cv.morphologyEx(mask, closed, cv.MORPH_OPEN, kernel);
+        cv.morphologyEx(closed, mask, cv.MORPH_CLOSE, kernel);
+        const contours = new cv.MatVector();
+        try {
+          cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+          for (let i = 0; i < contours.size(); i++) {
+            const contour = contours.get(i);
+            try {
+              const candidate = fitOutline(cv, contour, width, height, sourceCanvas, scale);
+              if (!candidate) continue;
+              candidate.method = 'opencv';
+              candidate.detectionVariant = 'background-contrast';
+              const score = polygonArea(candidate.corners) * candidate.paperConfidence;
+              if (!best || score > polygonArea(best.corners) * best.paperConfidence) best = candidate;
+            } finally { contour.delete(); }
+          }
+        } finally { contours.delete(); }
+      }
       return best;
     } catch (error) {
       console.warn('Không thể dò thêm đường viền giấy A4.', error);
@@ -162,5 +253,5 @@
     return union > 0 && intersection / union >= 0.82;
   }
 
-  root.A4DocumentDetector = { detect, matchesBounds };
+  root.A4DocumentDetector = { detect, matchesBounds, fillBackgroundContrastMask };
 })(typeof self !== 'undefined' ? self : globalThis);
