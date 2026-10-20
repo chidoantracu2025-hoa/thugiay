@@ -67,19 +67,23 @@ async function processScanRequest(data) {
       if (mode !== 'fallback') {
         const openCvBounds = detectDocumentWithOpenCv(sourceCanvas, false, options);
         if (openCvBounds) candidates.push(openCvBounds);
-        // A two-colour open certificate can split into separate bright/dark halves
-        // at the normal probe size. The small preview mask often joins both halves;
-        // retry it only when the first result is clearly one-sided.
-        if (openCvBounds && options.preferSpread && !options.fast) {
-          const candidateArea = openCvBounds.width * openCvBounds.height;
+        // A two-colour open certificate can disappear or split into separate
+        // bright/dark halves at the normal probe size. The small preview mask
+        // often joins both halves; retry it only for a missing or one-sided result.
+        if (options.preferSpread && !options.fast) {
           const frameArea = sourceCanvas.width * sourceCanvas.height;
-          const candidateCenterX = openCvBounds.x + openCvBounds.width / 2;
-          const oneSided = candidateArea < frameArea * 0.48 &&
-            Math.abs(candidateCenterX - sourceCanvas.width / 2) > sourceCanvas.width * 0.10;
+          const oneSided = !openCvBounds || (
+            openCvBounds.width * openCvBounds.height < frameArea * 0.48 &&
+            Math.abs(openCvBounds.x + openCvBounds.width / 2 - sourceCanvas.width / 2) > sourceCanvas.width * 0.10
+          );
           if (oneSided) {
             const spreadRecovery = detectDocumentWithOpenCv(sourceCanvas, false,
               Object.assign({}, options, { fast: true, maxDimension: 480 }));
             if (spreadRecovery) candidates.push(spreadRecovery);
+            const supportRecovery = window.A4DocumentDetector && window.A4DocumentDetector.recoverSpread
+              ? window.A4DocumentDetector.recoverSpread(sourceCanvas, spreadRecovery || openCvBounds)
+              : null;
+            if (supportRecovery) candidates.push(supportRecovery);
           }
         }
       }
@@ -295,6 +299,12 @@ async function processScanRequest(data) {
         });
       }
 
+      if (selected && options.fast && options.preferSpread && window.A4DocumentDetector &&
+          window.A4DocumentDetector.recoverSpread) {
+        const recovered = window.A4DocumentDetector.recoverSpread(sourceCanvas, selected);
+        if (recovered && scoreDocumentBounds(recovered, sourceCanvas, options) >
+            scoreDocumentBounds(selected, sourceCanvas, options)) selected = recovered;
+      }
       return selected;
     }
 

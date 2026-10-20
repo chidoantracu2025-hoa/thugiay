@@ -65,4 +65,21 @@ function image(width, height, pixel) {
     'A neutral border does not trigger the coloured-background fallback.');
 }
 
+{
+  const width = 320, height = 240;
+  const sourceImage = image(width, height, (x, y) => {
+    if (x >= 20 && x <= 305 && y >= 60 && y <= 180) return x < 160 ? [235, 230, 211] : [205, 38, 50];
+    if (y < 22 && x < 90) return [72, 82, 112]; // unrelated object touching the frame
+    return [24 + x % 7, 126 + y % 11, 55 + x % 5];
+  });
+  const canvas = { width, height, getContext: () => ({ getImageData: () => sourceImage }) };
+  const rightPage = { x: 160, y: 60, width: 145, height: 120, corners: [
+    { x: 160, y: 60 }, { x: 305, y: 62 }, { x: 305, y: 178 }, { x: 160, y: 180 }
+  ] };
+  const recovered = detector.recoverSpread(canvas, rightPage);
+  assert(recovered && recovered.detected, 'The missing half of a two-colour spread is recovered.');
+  assert(recovered.x <= 25 && recovered.width >= 275, 'Spread recovery retains both the pale and red pages.');
+  assert.strictEqual(recovered.detectionVariant, 'spread-support');
+}
+
 console.log('A4/A3 detector: mixed, aged and torn paper is retained over blue/green support surfaces.');

@@ -53,9 +53,14 @@
     const saturationSums = new Float64Array(24);
     const border = Math.max(2, Math.round(Math.min(width, height) * 0.025));
     let samples = 0;
-    for (let y = 0; y < height; y += 2) {
-      for (let x = 0; x < width; x += 2) {
-        if (x >= border && x < width - border && y >= border && y < height - border) continue;
+    // Include a sparse sample of the whole frame because real field photos can
+    // have people, floor or equipment along every image edge. Border pixels
+    // still receive more weight, while the interior lets the actual support
+    // colour win when those edge samples are contaminated.
+    for (let y = 0; y < height; y += 3) {
+      for (let x = 0; x < width; x += 3) {
+        const onBorder = x < border || x >= width - border || y < border || y >= height - border;
+        const weight = onBorder ? 3 : 1;
         const offset = (y * width + x) * 4;
         const red = pixels[offset] / 255;
         const green = pixels[offset + 1] / 255;
@@ -65,9 +70,9 @@
         const saturation = maximum ? (maximum - minimum) / maximum : 0;
         if (saturation < 0.22 || maximum < 0.12) continue;
         const bin = Math.min(23, Math.floor(hueOf(red, green, blue) * 24));
-        bins[bin]++;
-        saturationSums[bin] += saturation;
-        samples++;
+        bins[bin] += weight;
+        saturationSums[bin] += saturation * weight;
+        samples += weight;
       }
     }
     let dominant = 0;
@@ -88,6 +93,93 @@
       bits[index] = sameSurface ? 0 : 255;
     }
     return true;
+  }
+
+  // Recover the missing half of an open certificate when the regular contour
+  // detector locks onto only one page. It samples a narrow, low-resolution
+  // raster and extends the detected page only across columns that consistently
+  // differ from the dominant coloured support surface.
+  function recoverSpread(sourceCanvas, page) {
+    if (!sourceCanvas || !page || !page.corners || page.corners.length !== 4) return null;
+    const sourceWidth = sourceCanvas.width, sourceHeight = sourceCanvas.height;
+    if (!sourceWidth || !sourceHeight) return null;
+    const pageCenter = page.x + page.width / 2;
+    const missingLeft = pageCenter > sourceWidth * 0.60;
+    const missingRight = pageCenter < sourceWidth * 0.40;
+    if (!missingLeft && !missingRight) return null;
+
+    const scale = Math.min(1, 320 / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    let probe;
+    if (sourceCanvas.getContext) probe = sourceCanvas;
+    else if (typeof OffscreenCanvas !== 'undefined') {
+      probe = new OffscreenCanvas(width, height);
+      probe.getContext('2d').drawImage(sourceCanvas, 0, 0, width, height);
+    } else if (typeof document !== 'undefined') {
+      probe = document.createElement('canvas'); probe.width = width; probe.height = height;
+      probe.getContext('2d').drawImage(sourceCanvas, 0, 0, width, height);
+    } else return null;
+    if (probe === sourceCanvas && scale < 1) {
+      const resized = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : document.createElement('canvas');
+      resized.width = width; resized.height = height;
+      resized.getContext('2d').drawImage(sourceCanvas, 0, 0, width, height); probe = resized;
+    }
+    const pixels = probe.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height).data;
+    const px = page.x * scale, py = page.y * scale, pw = page.width * scale, ph = page.height * scale;
+    const bins = new Uint32Array(24), saturationSums = new Float64Array(24);
+    let samples = 0;
+    for (let y = 0; y < height; y += 3) for (let x = 0; x < width; x += 3) {
+      if (x >= px && x <= px + pw && y >= py && y <= py + ph) continue;
+      const offset = (y * width + x) * 4;
+      const red = pixels[offset] / 255, green = pixels[offset + 1] / 255, blue = pixels[offset + 2] / 255;
+      const maximum = Math.max(red, green, blue), minimum = Math.min(red, green, blue);
+      const saturation = maximum ? (maximum - minimum) / maximum : 0;
+      if (saturation < 0.25 || maximum < 0.12) continue;
+      const bin = Math.min(23, Math.floor(hueOf(red, green, blue) * 24));
+      bins[bin]++; saturationSums[bin] += saturation; samples++;
+    }
+    let dominant = 0;
+    for (let index = 1; index < bins.length; index++) if (bins[index] > bins[dominant]) dominant = index;
+    if (samples < 50 || bins[dominant] < samples * 0.18) return null;
+    const backgroundHue = (dominant + 0.5) / bins.length;
+    const backgroundSaturation = saturationSums[dominant] / bins[dominant];
+    const top = Math.max(0, Math.floor(py + ph * 0.08));
+    const bottom = Math.min(height - 1, Math.ceil(py + ph * 0.92));
+    const requiredHits = Math.max(3, Math.round((bottom - top + 1) * 0.58));
+    const hits = new Uint16Array(width);
+    for (let y = top; y <= bottom; y++) for (let x = 0; x < width; x++) {
+      const offset = (y * width + x) * 4;
+      const red = pixels[offset] / 255, green = pixels[offset + 1] / 255, blue = pixels[offset + 2] / 255;
+      const maximum = Math.max(red, green, blue), minimum = Math.min(red, green, blue);
+      const saturation = maximum ? (maximum - minimum) / maximum : 0;
+      const support = saturation >= Math.max(0.12, backgroundSaturation * 0.30) &&
+        hueDistance(hueOf(red, green, blue), backgroundHue) <= 0.14;
+      if (!support) hits[x]++;
+    }
+    let edge = missingLeft ? Math.max(0, Math.floor(px)) : Math.min(width - 1, Math.ceil(px + pw));
+    if (missingLeft) {
+      while (edge > 0 && hits[edge - 1] >= requiredHits) edge--;
+    } else {
+      while (edge < width - 1 && hits[edge + 1] >= requiredHits) edge++;
+    }
+    const recoveredX = edge / scale;
+    const recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
+    if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) return null;
+    const corners = page.corners;
+    function lineY(first, second, x) {
+      return first.y + (second.y - first.y) * (x - first.x) / Math.max(1, second.x - first.x);
+    }
+    const expanded = missingLeft
+      ? [{ x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) }, corners[1], corners[2],
+        { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }]
+      : [corners[0], { x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) },
+        { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }, corners[3]];
+    const xs = expanded.map(point => point.x), ys = expanded.map(point => point.y);
+    const x = Math.max(0, Math.floor(Math.min(...xs))), y = Math.max(0, Math.floor(Math.min(...ys)));
+    const right = Math.min(sourceWidth, Math.ceil(Math.max(...xs))), bottomEdge = Math.min(sourceHeight, Math.ceil(Math.max(...ys)));
+    return { x, y, width: right - x, height: bottomEdge - y, corners: expanded, detected: true,
+      method: 'opencv', paperShape: true, paperConfidence: 0.82, detectionVariant: 'spread-support' };
   }
 
   // Expand the fitted quad to contain the whole hull, including curled edges.
@@ -270,5 +362,5 @@
     return union > 0 && intersection / union >= 0.82;
   }
 
-  root.A4DocumentDetector = { detect, matchesBounds, fillBackgroundContrastMask };
+  root.A4DocumentDetector = { detect, matchesBounds, fillBackgroundContrastMask, recoverSpread };
 })(typeof self !== 'undefined' ? self : globalThis);

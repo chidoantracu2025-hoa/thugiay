@@ -143,6 +143,12 @@ function assertFullFrameCandidateLoses(file) {
     file + ': a one-sided full-resolution result must try the bounded spread recovery.');
   assert.strictEqual(detectionCalls, 2,
     file + ': spread recovery performs exactly one additional small detection pass.');
+  detectionCalls = 0;
+  context.detectDocumentWithOpenCv = () => detectionCalls++ ? balancedTest1Spread : null;
+  const recoveredFromMissing = context.detectDocumentBounds(canvas, 'opencv', options);
+  assert.strictEqual(recoveredFromMissing.width, balancedTest1Spread.width,
+    file + ': a missing full-resolution contour must use the bounded preview recovery.');
+  assert.strictEqual(detectionCalls, 2, file + ': a missing contour performs one recovery pass.');
 }
 
 async function assertNativeQuality(file) {
