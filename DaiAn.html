@@ -1732,6 +1732,15 @@
       if (areaRatio < 0.06) score -= 0.2;
       if (options.preferSpread && areaRatio > 0.2 && aspect < 2.2) score += 0.08;
       if (bounds.corners) {
+        const sides = bounds.corners.map((point, index, points) => {
+          const next = points[(index + 1) % points.length];
+          return Math.hypot(point.x - next.x, point.y - next.y);
+        });
+        const oppositeRatio = Math.max(
+          Math.max(sides[0], sides[2]) / Math.max(1, Math.min(sides[0], sides[2])),
+          Math.max(sides[1], sides[3]) / Math.max(1, Math.min(sides[1], sides[3]))
+        );
+        if (oppositeRatio > 1.18) score -= Math.min(0.45, (oppositeRatio - 1.18) * 1.5);
         const margin = Math.min(...bounds.corners.map(point => Math.min(point.x, point.y, sourceCanvas.width - point.x, sourceCanvas.height - point.y)));
         const shortEdge = Math.min(sourceCanvas.width, sourceCanvas.height);
         if (margin <= 0) score -= bounds.detectionVariant === 'background-contrast' ? 0.12 : 0.6;

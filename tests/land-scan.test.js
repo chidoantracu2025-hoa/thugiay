@@ -122,6 +122,15 @@ function assertFullFrameCandidateLoses(file) {
   ] };
   assert(context.scoreDocumentBounds(clippedPaper, canvas, options) > context.scoreDocumentBounds(halfPage, canvas, options),
     file + ': a validated two-page spread clipped at one edge must outrank a single detected half.');
+  const unevenTest1Contour = { x: 53, y: 80, width: 1822, height: 1648, method: 'opencv', corners: [
+    { x: 53, y: 80 }, { x: 1856, y: 464 }, { x: 1875, y: 1707 }, { x: 77, y: 1728 }
+  ] };
+  const balancedTest1Spread = { x: 44, y: 438, width: 1867, height: 1313, method: 'opencv', paperShape: true,
+    paperConfidence: .92, corners: [
+      { x: 50, y: 453 }, { x: 1886, y: 439 }, { x: 1911, y: 1729 }, { x: 44, y: 1751 }
+    ] };
+  assert(context.scoreDocumentBounds(balancedTest1Spread, canvas, options) > context.scoreDocumentBounds(unevenTest1Contour, canvas, options),
+    file + ': the balanced test1.jpg spread must outrank a false contour extending into the background.');
 }
 
 async function assertNativeQuality(file) {
