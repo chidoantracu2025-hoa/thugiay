@@ -454,7 +454,7 @@
             verifyBounds(candidate, expected, .8);
             verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .8);
           } else if (sample === 'test1.jpg') {
-            const expected = { x: canvas.width * .02, y: canvas.height * .17, width: canvas.width * .975, height: canvas.height * .52 };
+            const expected = { x: canvas.width * .008, y: canvas.height * .22, width: canvas.width * .98, height: canvas.height * .52 };
             verifyBounds(candidate, expected, .85);
             verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .8);
           } else if (sample === 'test4.jpg') {

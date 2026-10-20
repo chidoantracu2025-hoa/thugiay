@@ -113,24 +113,36 @@ function assertFullFrameCandidateLoses(file) {
     file + ': the real A3 spread must outrank a contour hugging the full camera frame.');
   assert(context.scoreDocumentBounds(paper, canvas, options) > context.scoreDocumentBounds(topEdgeIntruder, canvas, options),
     file + ': the real A3 spread must outrank a large contour attached to the top image edge.');
-  const clippedPaper = { x: 50, y: 0, width: 1830, height: 1320, method: 'opencv', paperShape: true,
+  const clippedPaper = { x: 50, y: 0, width: 1830, height: 1320, method: 'opencv', detected: true, paperShape: true,
     paperConfidence: .92, detectionVariant: 'background-contrast', corners: [
       { x: 60, y: 80 }, { x: 1810, y: 0 }, { x: 1880, y: 1310 }, { x: 50, y: 1320 }
     ] };
-  const halfPage = { x: 960, y: 50, width: 850, height: 1250, method: 'opencv', corners: [
+  const halfPage = { x: 960, y: 50, width: 850, height: 1250, method: 'opencv', detected: true, corners: [
     { x: 960, y: 100 }, { x: 1770, y: 50 }, { x: 1810, y: 1300 }, { x: 1000, y: 1290 }
   ] };
   assert(context.scoreDocumentBounds(clippedPaper, canvas, options) > context.scoreDocumentBounds(halfPage, canvas, options),
     file + ': a validated two-page spread clipped at one edge must outrank a single detected half.');
-  const unevenTest1Contour = { x: 53, y: 80, width: 1822, height: 1648, method: 'opencv', corners: [
+  const unevenTest1Contour = { x: 53, y: 80, width: 1822, height: 1648, method: 'opencv', detected: true, corners: [
     { x: 53, y: 80 }, { x: 1856, y: 464 }, { x: 1875, y: 1707 }, { x: 77, y: 1728 }
   ] };
-  const balancedTest1Spread = { x: 44, y: 438, width: 1867, height: 1313, method: 'opencv', paperShape: true,
+  const balancedTest1Spread = { x: 44, y: 438, width: 1867, height: 1313, method: 'opencv', detected: true, paperShape: true,
     paperConfidence: .92, corners: [
       { x: 50, y: 453 }, { x: 1886, y: 439 }, { x: 1911, y: 1729 }, { x: 44, y: 1751 }
     ] };
   assert(context.scoreDocumentBounds(balancedTest1Spread, canvas, options) > context.scoreDocumentBounds(unevenTest1Contour, canvas, options),
     file + ': the balanced test1.jpg spread must outrank a false contour extending into the background.');
+
+  let detectionCalls = 0;
+  context.detectDocumentWithOpenCv = () => detectionCalls++ ? balancedTest1Spread : halfPage;
+  context.detectDocumentWithJscanify = () => null;
+  context.detectDocumentByColorFallback = () => null;
+  context.window = {};
+  vm.runInContext(functionCode('detectDocumentBounds', source), context);
+  const recovered = context.detectDocumentBounds(canvas, 'opencv', options);
+  assert.strictEqual(recovered.width, balancedTest1Spread.width,
+    file + ': a one-sided full-resolution result must try the bounded spread recovery.');
+  assert.strictEqual(detectionCalls, 2,
+    file + ': spread recovery performs exactly one additional small detection pass.');
 }
 
 async function assertNativeQuality(file) {
@@ -357,6 +369,7 @@ for (const invalid of ['https://example.org/000000000000', '000000000000', '1234
     await assertNativeQuality(file);
     await assertNativeCamera(file);
   }
+  assertFullFrameCandidateLoses('assets/document-scan-worker.js');
   const gs = fs.readFileSync(path.join(root, 'code.gs'), 'utf8');
   const rows = [], savedNames = [];
   const server = vm.createContext({ ensureSheet: () => ({ getLastRow: () => 1, appendRow: row => rows.push(row) }),
