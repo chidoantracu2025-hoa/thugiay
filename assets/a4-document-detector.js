@@ -127,7 +127,8 @@
     }
     const pixels = probe.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height).data;
     const px = page.x * scale, py = page.y * scale, pw = page.width * scale, ph = page.height * scale;
-    const bins = new Uint32Array(24), saturationSums = new Float64Array(24);
+    const bins = new Uint32Array(24), borderBins = new Uint32Array(24), saturationSums = new Float64Array(24);
+    const borderBand = Math.max(2, Math.round(Math.min(width, height) * 0.04));
     let samples = 0;
     for (let y = 0; y < height; y += 3) for (let x = 0; x < width; x += 3) {
       if (x >= px && x <= px + pw && y >= py && y <= py + ph) continue;
@@ -138,12 +139,15 @@
       if (saturation < 0.25 || maximum < 0.12) continue;
       const bin = Math.min(23, Math.floor(hueOf(red, green, blue) * 24));
       bins[bin]++; saturationSums[bin] += saturation; samples++;
+      if (x < borderBand || x >= width - borderBand || y < borderBand || y >= height - borderBand) borderBins[bin]++;
     }
     let dominant = 0;
     for (let index = 1; index < bins.length; index++) if (bins[index] > bins[dominant]) dominant = index;
-    if (samples < 50 || bins[dominant] < samples * 0.18) return null;
-    const backgroundHue = (dominant + 0.5) / bins.length;
-    const backgroundSaturation = saturationSums[dominant] / bins[dominant];
+    const dominantSaturation = bins[dominant] ? saturationSums[dominant] / bins[dominant] : 0;
+    const hasColourSupport = samples >= 50 && bins[dominant] >= samples * 0.18 &&
+      borderBins[dominant] >= 10 && dominantSaturation >= 0.40;
+    const backgroundHue = hasColourSupport ? (dominant + 0.5) / bins.length : 0;
+    const backgroundSaturation = hasColourSupport ? dominantSaturation : 0;
     const top = Math.max(0, Math.floor(py + ph * 0.08));
     const bottom = Math.min(height - 1, Math.ceil(py + ph * 0.92));
     const requiredHits = Math.max(3, Math.round((bottom - top + 1) * 0.58));
@@ -153,16 +157,55 @@
       const red = pixels[offset] / 255, green = pixels[offset + 1] / 255, blue = pixels[offset + 2] / 255;
       const maximum = Math.max(red, green, blue), minimum = Math.min(red, green, blue);
       const saturation = maximum ? (maximum - minimum) / maximum : 0;
-      const support = saturation >= Math.max(0.12, backgroundSaturation * 0.30) &&
+      const support = hasColourSupport && saturation >= Math.max(0.12, backgroundSaturation * 0.30) &&
         hueDistance(hueOf(red, green, blue), backgroundHue) <= 0.14;
-      if (!support) hits[x]++;
+      if (hasColourSupport && !support) hits[x]++;
+    }
+    if (!hasColourSupport) {
+      // Neutral granite/tile has no stable hue. Compare narrow strips on both
+      // sides of the top and bottom page edges independently. Keeping the two
+      // edge comparisons separate avoids treating two different floor tiles as
+      // one large sheet of paper.
+      function range(from, to) {
+        return [Math.max(0, Math.min(height - 1, Math.floor(py + ph * from))),
+          Math.max(0, Math.min(height - 1, Math.ceil(py + ph * to)))];
+      }
+      const topInside = range(0.05, 0.18), topOutside = range(-0.18, -0.05);
+      const bottomInside = range(0.82, 0.95), bottomOutside = range(1.05, 1.18);
+      function columnMean(x, sampleRange) {
+        let red = 0, green = 0, blue = 0, count = 0;
+        const ranges = [sampleRange];
+        ranges.forEach(range => {
+          for (let y = range[0]; y <= range[1]; y += 2) {
+            const offset = (y * width + x) * 4;
+            const r = pixels[offset], g = pixels[offset + 1], b = pixels[offset + 2];
+            red += r; green += g; blue += b; count++;
+          }
+        });
+        if (!count) return null;
+        return { red: red / count, green: green / count, blue: blue / count };
+      }
+      function colourDistance(first, second) {
+        return first && second ? Math.hypot(first.red - second.red, first.green - second.green, first.blue - second.blue) : 0;
+      }
+      for (let x = 0; x < width; x++) {
+        const topDifference = colourDistance(columnMean(x, topInside), columnMean(x, topOutside));
+        const bottomDifference = colourDistance(columnMean(x, bottomInside), columnMean(x, bottomOutside));
+        if ((topDifference >= 14 && bottomDifference >= 14) || topDifference >= 38 || bottomDifference >= 38) {
+          hits[x] = requiredHits;
+        }
+      }
     }
     let edge = missingLeft ? Math.max(0, Math.floor(px)) : Math.min(width - 1, Math.ceil(px + pw));
-    if (missingLeft) {
-      while (edge > 0 && hits[edge - 1] >= requiredHits) edge--;
-    } else {
-      while (edge < width - 1 && hits[edge + 1] >= requiredHits) edge++;
+    let gap = 0, boundary = edge;
+    if (missingLeft) for (let x = edge - 1; x >= 0; x--) {
+      if (hits[x] >= requiredHits) { boundary = x; gap = 0; }
+      else if (++gap > 3) break;
+    } else for (let x = edge + 1; x < width; x++) {
+      if (hits[x] >= requiredHits) { boundary = x; gap = 0; }
+      else if (++gap > 3) break;
     }
+    edge = boundary;
     const recoveredX = edge / scale;
     const recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
     if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) return null;
@@ -306,6 +349,36 @@
             } finally { contour.delete(); }
           }
         } finally { contours.delete(); }
+      }
+      // Lamination glare can break every brightness-mask outline into small
+      // pieces, especially on neutral stone floors. Join only nearby edge gaps
+      // and fit the resulting closed outline. This pass is reserved for a
+      // missing or clearly one-sided spread candidate.
+      let preliminaryRatio = best ? polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) : 0;
+      let preliminaryCenterX = best ? best.x + best.width / 2 : sourceCanvas.width / 2;
+      const needsBrokenEdgePass = !best || Boolean(options.preferSpread && preliminaryRatio < 0.48 &&
+        Math.abs(preliminaryCenterX - sourceCanvas.width / 2) > sourceCanvas.width * 0.10);
+      if (needsBrokenEdgePass) {
+        const edges = new cv.Mat();
+        const joined = new cv.Mat();
+        const edgeKernelSize = Math.max(5, Math.round(Math.min(width, height) * 0.022) | 1);
+        const edgeKernel = cv.Mat.ones(edgeKernelSize, edgeKernelSize, cv.CV_8U);
+        const contours = new cv.MatVector();
+        try {
+          cv.Canny(blurred, edges, 28, 105);
+          cv.morphologyEx(edges, joined, cv.MORPH_CLOSE, edgeKernel);
+          cv.findContours(joined, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+          for (let i = 0; i < contours.size(); i++) {
+            const contour = contours.get(i);
+            try {
+              const candidate = fitOutline(cv, contour, width, height, sourceCanvas, scale, true);
+              if (!candidate) continue;
+              candidate.detectionVariant = 'joined-glare-edges';
+              const score = polygonArea(candidate.corners) * candidate.paperConfidence;
+              if (!best || score > polygonArea(best.corners) * best.paperConfidence) best = candidate;
+            } finally { contour.delete(); }
+          }
+        } finally { edges.delete(); joined.delete(); edgeKernel.delete(); contours.delete(); }
       }
       const bestRatio = best ? polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) : 0;
       const bestCenterX = best ? best.x + best.width / 2 : sourceCanvas.width / 2;

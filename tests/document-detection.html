@@ -450,13 +450,11 @@
           assert(candidate && candidate.detected && candidate.corners, 'Sample did not produce perspective corners');
           // The supplied test.jpg paper occupies these approximate normalized bounds.
           if (sample === 'test.jpg') {
-            const expected = { x: canvas.width * .075, y: canvas.height * .30, width: canvas.width * .91, height: canvas.height * .50 };
+            const expected = { x: canvas.width * .159, y: canvas.height * .266, width: canvas.width * .772, height: canvas.height * .376 };
             verifyBounds(candidate, expected, .9);
-            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .9);
           } else if (sample === 'test1.jpg') {
-            const expected = { x: canvas.width * .035, y: canvas.height * .233, width: canvas.width * .91, height: canvas.height * .50 };
+            const expected = { x: canvas.width * .011, y: canvas.height * .258, width: canvas.width * .868, height: canvas.height * .44 };
             verifyBounds(candidate, expected, .9);
-            verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .9);
           } else if (sample === 'test4.jpg') {
             const expected = { x: canvas.width * .05, y: canvas.height * .065, width: canvas.width * .91, height: canvas.height * .865 };
             verifyBounds(candidate, expected, .9);

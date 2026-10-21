@@ -82,4 +82,20 @@ function image(width, height, pixel) {
   assert.strictEqual(recovered.detectionVariant, 'spread-support');
 }
 
+{
+  const width = 320, height = 240;
+  const sourceImage = image(width, height, (x, y) => {
+    if (x >= 42 && x <= 286 && y >= 62 && y <= 181) return [224 + x % 5, 219 + y % 4, 203];
+    if (y < 120) return [82 + (x * 7 + y * 3) % 35, 80 + (x * 5) % 31, 78 + y % 29];
+    return [182 + (x * 3 + y) % 28, 180 + x % 21, 174 + y % 19];
+  });
+  const canvas = { width, height, getContext: () => ({ getImageData: () => sourceImage }) };
+  const rightPage = { x: 162, y: 62, width: 124, height: 119, corners: [
+    { x: 162, y: 62 }, { x: 286, y: 64 }, { x: 286, y: 179 }, { x: 162, y: 181 }
+  ] };
+  const recovered = detector.recoverSpread(canvas, rightPage);
+  assert(recovered && recovered.x <= 46 && recovered.width >= 238,
+    'Neutral stone/tile support recovers the other half without relying on background hue.');
+}
+
 console.log('A4/A3 detector: mixed, aged and torn paper is retained over blue/green support surfaces.');
