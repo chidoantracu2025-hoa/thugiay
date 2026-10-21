@@ -2,6 +2,26 @@
   'use strict';
   const hasGcn = row => Boolean(String(row['File GCN'] || '').trim());
   const isPending = row => String(row['Tình trạng xử lý'] || '').trim() !== 'Đã xử lý';
+  const SEARCH_COLUMNS = {
+    name: 'Họ Tên CSD', newSheet: 'Số hiệu tờ bản đồ mới', newPlot: 'Số thứ tự thửa mới',
+    oldSheet: 'Số hiệu tờ bản đồ cũ', oldPlot: 'Số thứ tự thửa cũ'
+  };
+  function normalizeSearchText(value) {
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
+  }
+  function matchesRecordFilters(row, filters = {}) {
+    const values = {}, queries = {};
+    Object.keys(SEARCH_COLUMNS).forEach(key => {
+      values[key] = normalizeSearchText(row && row[SEARCH_COLUMNS[key]]);
+      queries[key] = normalizeSearchText(filters[key]);
+    });
+    if (queries.name && !values.name.includes(queries.name)) return false;
+    for (const key of ['newSheet', 'newPlot', 'oldSheet', 'oldPlot']) {
+      if (queries[key] && !values[key].includes(queries[key])) return false;
+    }
+    const all = normalizeSearchText(filters.all);
+    return !all || Object.keys(SEARCH_COLUMNS).map(key => values[key]).join(' ').includes(all);
+  }
   function summarize(records) {
     return records.reduce((counts, row) => {
       counts.total++;
@@ -61,6 +81,7 @@
       return { counts: summarize(records), records };
     } finally { clearTimeout(timer); }
   }
-  root.LandReports = { summarize, loadReport, parseCsv, csvUrl, hasGcn, isPending };
+  root.LandReports = { summarize, loadReport, parseCsv, csvUrl, hasGcn, isPending,
+    normalizeSearchText, matchesRecordFilters };
   if (typeof module !== 'undefined') module.exports = root.LandReports;
 })(typeof window !== 'undefined' ? window : global);

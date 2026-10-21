@@ -6,7 +6,7 @@
 <link rel="icon" href="data:,">
 <style>
 :root{font-family:system-ui,-apple-system,sans-serif;color:#182942;background:#f1f5f9}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px;margin:0 0 8px}h2{font-size:19px}p{line-height:1.6;color:#596b80}button,input,a{font:inherit}button,.link{border:0;border-radius:8px;background:#1d4ed8;color:white;padding:11px 16px;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.55;cursor:wait}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:20px}.value{display:block;font-size:34px;font-weight:750;margin-top:8px}.green{color:#047857}.orange{color:#b45309}.muted{color:#596b80;font-size:14px}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:680px;text-align:left}th,td{padding:14px 12px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc;font-size:14px}td button{padding:6px 10px;background:#eef2ff;color:#1d4ed8}.error{color:#b91c1c}.tabs{display:flex;gap:8px;overflow:auto;padding:22px 0 12px}.tabs button{white-space:nowrap;background:#e2e8f0;color:#334155}.tabs button[aria-selected="true"]{background:#1d4ed8;color:white}input{width:100%;padding:12px;border:1px solid #bac7d8;border-radius:8px;margin:8px 0 12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.secondary{background:#e2e8f0;color:#334155}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}#tabDetails{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}#tabDetails strong{font-size:24px;display:block}#notice{min-height:24px}footer{margin:24px 0;color:#596b80;font-size:13px}@media(max-width:650px){main{padding:14px}header{align-items:flex-start;flex-direction:column}.cards{gap:8px}.card{padding:12px}.value{font-size:26px}h1{font-size:22px}}
-td.record-note{min-width:220px;max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere}
+td.record-note{min-width:220px;max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere}.record-search-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px}.record-search-grid label{font-size:14px;font-weight:600}.record-search-grid input{font-weight:400}@media(max-width:900px){.record-search-grid{grid-template-columns:repeat(2,minmax(150px,1fr))}}@media(max-width:520px){.record-search-grid{grid-template-columns:1fr}}
 </style>
 <script src="./assets/report-config.js"></script>
 <script src="./assets/report-dashboard.js"></script>
@@ -29,7 +29,15 @@ td.record-note{min-width:220px;max-width:360px;white-space:pre-wrap;overflow-wra
 <h2>Danh sách thửa theo xã</h2>
 <label for="recordFilter">Danh sách cần xem</label>
 <select id="recordFilter"><option value="collectedPending">Đã thu giấy và chưa xử lý</option><option value="collected">Tất cả đã thu giấy</option><option value="pending">Tất cả chưa xử lý</option><option value="all">Tất cả hồ sơ</option></select>
-<label for="recordSearch">Tìm họ tên, tờ hoặc thửa</label><input id="recordSearch" type="search" placeholder="Nhập để lọc danh sách">
+<label for="recordSearch">Tìm nhanh trong họ tên, tờ hoặc thửa</label><input id="recordSearch" type="search" placeholder="Nhập nội dung cần tìm trong 5 cột">
+<div class="record-search-grid" aria-label="Tìm kiếm theo từng cột">
+<label for="searchOwner">Họ tên CSD<input id="searchOwner" type="search" placeholder="Có thể nhập tên không dấu"></label>
+<label for="searchMapNew">Tờ mới<input id="searchMapNew" type="search" placeholder="Nhập tờ mới"></label>
+<label for="searchPlotNew">Thửa mới<input id="searchPlotNew" type="search" placeholder="Nhập thửa mới"></label>
+<label for="searchMapOld">Tờ cũ<input id="searchMapOld" type="search" placeholder="Nhập tờ cũ"></label>
+<label for="searchPlotOld">Thửa cũ<input id="searchPlotOld" type="search" placeholder="Nhập thửa cũ"></label>
+</div>
+<div class="actions"><button id="clearRecordSearch" class="secondary" type="button">Xóa nội dung tìm kiếm</button></div>
 <p id="recordCount" class="muted" aria-live="polite"></p>
 <div class="table-wrap"><table><thead><tr><th>STT</th><th>Họ tên CSD</th><th>Tờ mới</th><th>Thửa mới</th><th>Tờ cũ</th><th>Thửa cũ</th><th>Diện tích</th><th>GCN</th><th>Số CCCD</th><th>File CCCD</th><th>Tình trạng</th><th>Ghi chú</th></tr></thead><tbody id="recordRows"></tbody></table></div>
 <div class="actions" style="margin-top:14px"><button id="prevRecords">Trang trước</button><span id="recordPage" class="muted"></span><button id="nextRecords">Trang sau</button></div>
@@ -116,14 +124,20 @@ function renderSelected() {
 function renderRecords() {
   const state = states[selected];
   const filter = el('recordFilter').value;
-  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase();
-  const query = normalize(el('recordSearch').value.trim());
+  const searchFilters = {
+    all: el('recordSearch').value,
+    name: el('searchOwner').value,
+    newSheet: el('searchMapNew').value,
+    newPlot: el('searchPlotNew').value,
+    oldSheet: el('searchMapOld').value,
+    oldPlot: el('searchPlotOld').value
+  };
   const rows = (state.status === 'ready' ? state.records : []).filter(row => {
     const collected = LandReports.hasGcn(row), pending = LandReports.isPending(row);
     if (filter === 'collectedPending' && !(collected && pending)) return false;
     if (filter === 'collected' && !collected) return false;
     if (filter === 'pending' && !pending) return false;
-    return !query || normalize(['Họ Tên CSD','Số hiệu tờ bản đồ mới','Số thứ tự thửa mới','Số hiệu tờ bản đồ cũ','Số thứ tự thửa cũ'].map(key => row[key]).join(' ')).includes(query);
+    return LandReports.matchesRecordFilters(row, searchFilters);
   });
   const pages = Math.max(1, Math.ceil(rows.length / RECORD_PAGE_SIZE));
   recordPage = Math.min(recordPage, pages - 1);
@@ -225,7 +239,16 @@ window.addEventListener('storage', event => {
     refresh(index);
   });
 });
-el('recordFilter').onchange = el('recordSearch').oninput = () => { recordPage = 0; renderRecords(); };
+const refreshRecordFilters = () => { recordPage = 0; renderRecords(); };
+el('recordFilter').onchange = refreshRecordFilters;
+['recordSearch', 'searchOwner', 'searchMapNew', 'searchPlotNew', 'searchMapOld', 'searchPlotOld']
+  .forEach(id => { el(id).oninput = refreshRecordFilters; });
+el('clearRecordSearch').onclick = () => {
+  ['recordSearch', 'searchOwner', 'searchMapNew', 'searchPlotNew', 'searchMapOld', 'searchPlotOld']
+    .forEach(id => { el(id).value = ''; });
+  refreshRecordFilters();
+  el('recordSearch').focus();
+};
 el('prevRecords').onclick = () => { recordPage--; renderRecords(); };
 el('nextRecords').onclick = () => { recordPage++; renderRecords(); };
 selectTab(0); render(); Promise.all(PAGES.map((_, i) => refresh(i)));
