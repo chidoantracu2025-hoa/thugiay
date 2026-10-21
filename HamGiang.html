@@ -443,6 +443,16 @@
           <input id="nativeCameraFile" type="file" accept="image/*" capture="environment" hidden onchange="processImageFiles(this.files, 'system-camera')" />
           <label for="imageFiles">Chọn ảnh chụp sẵn</label>
           <input id="imageFiles" type="file" accept="image/*" multiple onchange="processImageFiles(this.files, 'upload')" />
+          <div class="field mt-8">
+            <label for="pdfUploadType">Hoặc chọn PDF đã scan sẵn</label>
+            <select id="pdfUploadType">
+              <option value="gcn">PDF giấy chứng nhận (GCN)</option>
+              <option value="cccd">PDF căn cước công dân (CCCD)</option>
+            </select>
+            <input id="scannedPdfFile" type="file" accept="application/pdf,.pdf" onchange="selectScannedPdf(this.files)" />
+            <button class="secondary" type="button" onclick="clearSelectedScannedPdf()">Bỏ PDF đã chọn</button>
+            <div id="scannedPdfStatus" class="helper">PDF được tải nguyên bản lên Drive, không nhận diện ảnh và không ghép lại. Tối đa 10 MB mỗi file.</div>
+          </div>
           <div class="helper">Có thể chọn nhiều ảnh cùng loại. Mặt trước CCCD: ưu tiên đọc QR trên thiết bị, OCR khi QR chưa đọc được. Ảnh GCN ưu tiên khổ A3 và độ rõ chữ, xử lý tối đa 400 dpi; PDF tối đa 10 MB mỗi file. Camera tự nghỉ sau chụp và khi lưu. Hồ sơ lớn tự chia theo trang, lưu các phần trong cùng thư mục. Nên dùng camera hệ thống nếu trình duyệt chụp thiếu nét.</div>
         </div>
 
@@ -636,6 +646,7 @@
       savedPdfGroups: null,
       documentPages: [],
       cccdPhotos: [],
+      directPdfFiles: { gcn: null, cccd: null },
       detectionFrame: 0,
       colorProbe: null,
       opencvReady: false,
@@ -1440,6 +1451,66 @@
         if (nativeInput) nativeInput.value = '';
         state.processing = false;
       }
+    }
+
+    function renderSelectedScannedPdf() {
+      const status = document.getElementById('scannedPdfStatus');
+      if (!status) return;
+      const labels = [];
+      if (state.directPdfFiles.gcn) labels.push(`GCN: ${state.directPdfFiles.gcn.name} (${(state.directPdfFiles.gcn.size / 1048576).toFixed(2)} MB)`);
+      if (state.directPdfFiles.cccd) labels.push(`CCCD: ${state.directPdfFiles.cccd.name} (${(state.directPdfFiles.cccd.size / 1048576).toFixed(2)} MB)`);
+      status.textContent = labels.length
+        ? `Đã chọn ${labels.join(' • ')}. File sẽ được tải nguyên bản, không nhận diện hoặc ghép lại.`
+        : 'PDF được tải nguyên bản lên Drive, không nhận diện ảnh và không ghép lại. Tối đa 10 MB mỗi file.';
+    }
+
+    function selectScannedPdf(fileList) {
+      if (state.processing || state.saving) return;
+      const input = document.getElementById('scannedPdfFile');
+      const file = fileList && fileList[0];
+      const kind = document.getElementById('pdfUploadType').value === 'cccd' ? 'cccd' : 'gcn';
+      try {
+        if (!file) return;
+        if (!/\.pdf$/i.test(file.name || '') && file.type !== 'application/pdf') throw new Error('Vui lòng chọn đúng file PDF.');
+        if (!file.size) throw new Error('File PDF đang rỗng.');
+        if (file.size > window.DocumentPdfExporter.MAX_PDF_BYTES) throw new Error('PDF vượt giới hạn 10 MB.');
+        state.directPdfFiles[kind] = file;
+        state.saveAttempt = null;
+        renderSelectedScannedPdf();
+        setStatus(`Đã chọn PDF ${kind === 'gcn' ? 'GCN' : 'CCCD'}; file sẽ được tải nguyên bản khi lưu hồ sơ.`, 'success');
+      } catch (error) {
+        alert(error.message);
+        setStatus('Chưa chọn được PDF scan sẵn.', 'error');
+      } finally {
+        if (input) input.value = '';
+      }
+    }
+
+    function clearSelectedScannedPdf(kind) {
+      if (state.processing || state.saving) return;
+      const selectedKind = kind || (document.getElementById('pdfUploadType').value === 'cccd' ? 'cccd' : 'gcn');
+      state.directPdfFiles[selectedKind] = null;
+      state.saveAttempt = null;
+      renderSelectedScannedPdf();
+      setStatus(`Đã bỏ PDF ${selectedKind === 'gcn' ? 'GCN' : 'CCCD'} đã chọn.`, 'normal');
+    }
+
+    function readScannedPdfPart(file) {
+      return new Promise((resolve, reject) => {
+        if (!file || !file.size || file.size > window.DocumentPdfExporter.MAX_PDF_BYTES) {
+          reject(new Error('PDF scan sẵn không hợp lệ hoặc vượt giới hạn 10 MB.')); return;
+        }
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('Không đọc được PDF scan sẵn.'));
+        reader.onload = () => {
+          const dataUri = String(reader.result || '');
+          if (!/^data:application\/pdf;base64,/i.test(dataUri)) {
+            reject(new Error('Dữ liệu PDF scan sẵn không hợp lệ.')); return;
+          }
+          resolve({ dataUri, byteLength: file.size, pageCount: 0, directUpload: true });
+        };
+        reader.readAsDataURL(file);
+      });
     }
 
     async function decodeImageFile(file) {
@@ -2377,9 +2448,13 @@
     function scanGroupKey(scans, kind) {
       if (!scans.length) return '';
       const entries = state.pdfGroupIdentities || (state.pdfGroupIdentities = []);
-      const revisions = scans.map(item => [item.revision || 0, item.processingQuality && item.processingQuality.dpi || 400,
-        item.processedWidth || item.canvas && item.canvas.width, item.processedHeight || item.canvas && item.canvas.height].join(':'));
-      const sources = scans.map(item => kind === 'original' ? item.originalBlob || item.originalCanvas : item.processedBlob || item.canvas);
+      const revisions = scans.map(item => item && typeof item.size === 'number' && typeof item.name === 'string'
+        ? ['pdf', item.name, item.size, item.lastModified || 0].join(':')
+        : [item.revision || 0, item.processingQuality && item.processingQuality.dpi || 400,
+          item.processedWidth || item.canvas && item.canvas.width, item.processedHeight || item.canvas && item.canvas.height].join(':'));
+      const sources = scans.map(item => item && typeof item.size === 'number' && typeof item.name === 'string'
+        ? item
+        : (kind === 'original' ? item.originalBlob || item.originalCanvas : item.processedBlob || item.canvas));
       const prior = entries.find(entry => entry.kind === kind && entry.items.length === scans.length &&
         entry.items.every((item, index) => item === scans[index] && entry.revisions[index] === revisions[index] && entry.sources[index] === sources[index]));
       if (prior) return prior.key;
@@ -2448,7 +2523,11 @@
     async function saveCurrentRecord() {
       const saveActionStarted = performance.now();
       if (state.saving || state.processing) return;
-      const pendingQuality = [...state.documentPages, ...state.cccdPhotos].filter(item => {
+      const directPdfFiles = state.directPdfFiles || (state.directPdfFiles = { gcn: null, cccd: null });
+      const directGcn = directPdfFiles.gcn;
+      const directCccd = directPdfFiles.cccd;
+      const qualityItems = [...(directGcn ? [] : state.documentPages), ...(directCccd ? [] : state.cccdPhotos)];
+      const pendingQuality = qualityItems.filter(item => {
         const status = item.processingQuality && item.processingQuality.report && item.processingQuality.report.overall.status;
         return status && status !== 'pass' && !item.qualityAccepted;
       });
@@ -2473,6 +2552,9 @@
         if (!requestUrl) throw new Error('Vui lòng nhập Web App URL trước khi thao tác.');
         const documentPages = state.documentPages.slice();
         const cccdPhotos = state.cccdPhotos.slice();
+        const gcnUploadItems = directGcn ? [directGcn] : documentPages;
+        const cccdUploadItems = directCccd ? [directCccd] : cccdPhotos;
+        const originalItems = [...(directGcn ? [] : documentPages), ...(directCccd ? [] : cccdPhotos)];
         const payload = {
           tenHuyen: document.getElementById('tenHuyen').value.trim(),
           tenXaCu: document.getElementById('tenXaCu').value.trim(),
@@ -2491,11 +2573,13 @@
           soCCCD: document.getElementById('soCCCD').value.trim(),
           ocrText: document.getElementById('ocrText').value.trim(),
           rowIndex: state.selectedRowIndex,
-          pageCount: documentPages.length + cccdPhotos.length,
+          pageCount: (directGcn ? 1 : documentPages.length) + (directCccd ? 1 : cccdPhotos.length),
           createdAt: new Date().toISOString(),
-          fileName: buildPdfFileName(), fileNameCCCD: buildCccdPdfFileName(), fileNameOriginal: buildOriginalBackupFileName()
+          fileName: directGcn ? directGcn.name : buildPdfFileName(),
+          fileNameCCCD: directCccd ? directCccd.name : buildCccdPdfFileName(),
+          fileNameOriginal: buildOriginalBackupFileName()
         };
-        attempt = makeSaveAttempt(payload, requestUrl, { original: [...documentPages, ...cccdPhotos], gcn: documentPages, cccd: cccdPhotos });
+        attempt = makeSaveAttempt(payload, requestUrl, { original: originalItems, gcn: gcnUploadItems, cccd: cccdUploadItems });
         if (attempt.complete) {
           appendSavePerformanceLog({ result: 'unchanged', update: state.selectedRowIndex >= 2,
             documentPages: documentPages.length, cccdPages: cccdPhotos.length, totalMs: performance.now() - startTime });
@@ -2534,9 +2618,12 @@
         // Stage every needed group before the first write; acknowledged or unchanged PDFs are omitted.
         for (const kind of ['original', 'gcn', 'cccd']) {
           if (!attempt.plannedKeys[kind] || (attempt.retrySupported && attempt.acknowledged[kind] === attempt.plannedKeys[kind])) continue;
-          prepared[kind] = kind === 'original'
-            ? await buildOriginalBackupPdf(attempt.groups[kind], { dpiOverride: exportDpi })
-            : await buildPdfFromScans(attempt.groups[kind], { dpiOverride: exportDpi });
+          const directFile = kind === 'gcn' ? directGcn : (kind === 'cccd' ? directCccd : null);
+          prepared[kind] = directFile
+            ? [await readScannedPdfPart(directFile)]
+            : (kind === 'original'
+              ? await buildOriginalBackupPdf(attempt.groups[kind], { dpiOverride: exportDpi })
+              : await buildPdfFromScans(attempt.groups[kind], { dpiOverride: exportDpi }));
         }
         const upload = { ...attempt.payload, saveRequestId: attempt.id, pdfGroupKeys: { ...attempt.plannedKeys } };
         if (!attempt.retrySupported && attempt.savedRowIndex >= 2) upload.rowIndex = attempt.savedRowIndex;
@@ -2615,6 +2702,10 @@
 
       state.documentPages = [];
       state.cccdPhotos = [];
+      state.directPdfFiles = { gcn: null, cccd: null };
+      const scannedPdfInput = document.getElementById('scannedPdfFile');
+      if (scannedPdfInput) scannedPdfInput.value = '';
+      if (typeof renderSelectedScannedPdf === 'function') renderSelectedScannedPdf();
       state.selectedRowIndex = null;
       state.pendingRetakeId = null;
       document.getElementById('btnSaveRecord').textContent = 'Lưu hồ sơ';

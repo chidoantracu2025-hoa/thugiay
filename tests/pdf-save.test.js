@@ -42,7 +42,8 @@ function fixture(html, options) {
   const cards = options.noImages ? [] : [image('front-1', 'cccd-front'), image('back-1', 'cccd-back')];
   const state = { documentPages: documents, cccdPhotos: cards, selectedRowIndex: options.rowIndex || null,
     saving: false, processing: false, stream: options.cameraOpen ? {} : null,
-    qualityDpi: options.qualityDpi || 400, captureProfile: options.captureProfile || 'fast' };
+    qualityDpi: options.qualityDpi || 400, captureProfile: options.captureProfile || 'fast',
+    directPdfFiles: { gcn: null, cccd: null } };
   const test = { nodes: nodes, state: state, exports: [], calls: [], alerts: [], statuses: [], renders: [],
     performanceLogs: [], noteSaves: 0, cameraStops: 0 };
   const plans = options.plans || [[part('original')], [part('gcn')], [part('cccd')]];
@@ -89,15 +90,23 @@ function fixture(html, options) {
     setStatus: function (text, tone) { test.statuses.push({ text: text, tone: tone }); },
     renderRecordFiles: function (files) { test.renders.push(files); },
     appendSavePerformanceLog: function (entry) { test.performanceLogs.push(Object.assign({}, entry)); return entry; },
-    saveNoteOnly: function () { test.noteSaves++; }
+    saveNoteOnly: function () { test.noteSaves++; },
+    FileReader: class {
+      readAsDataURL(file) {
+        this.result = file.dataUri || 'data:application/pdf;base64,AAAA';
+        Promise.resolve().then(() => this.onload());
+      }
+    }
   });
   vm.runInContext(runtime, context);
   vm.runInContext([
     'buildPdfParts', 'buildPdfFromScans', 'buildOriginalBackupPdf', 'pdfUploadFields',
     'buildPdfFileName', 'buildCccdPdfFileName', 'buildOriginalBackupFileName', 'buildRecordFileNameParts',
-    'normalizeFileNamePart', 'scanGroupKey', 'chooseAdaptiveSaveDpi', 'makeSaveAttempt', 'applySaveResult', 'saveCurrentRecord'
+    'normalizeFileNamePart', 'scanGroupKey', 'chooseAdaptiveSaveDpi', 'makeSaveAttempt', 'applySaveResult',
+    'renderSelectedScannedPdf', 'selectScannedPdf', 'clearSelectedScannedPdf', 'readScannedPdfPart', 'saveCurrentRecord'
   ].map(function (name) { return functionCode(html, name); }).join('\n'), context);
   test.save = context.saveCurrentRecord;
+  test.selectPdf = context.selectScannedPdf; test.clearPdf = context.clearSelectedScannedPdf;
   test.fields = context.pdfUploadFields; test.node = node;
   test.documents = documents; test.cards = cards;
   return test;
@@ -503,6 +512,32 @@ async function verifyPage(page) {
     assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 0);
     resetAfter(test);
   }
+  // Pre-scanned PDFs bypass image detection, JPEG encoding and PDF assembly.
+  {
+    const test = fixture(html, { noImages: true });
+    const gcn = { name: 'GCN_scan_san.pdf', type: 'application/pdf', size: 345678, lastModified: 10,
+      dataUri: 'data:application/pdf;base64,R0NO' };
+    const cccd = { name: 'CCCD_scan_san.pdf', type: 'application/pdf', size: 45678, lastModified: 20,
+      dataUri: 'data:application/pdf;base64,Q0NDRA==' };
+    test.node('pdfUploadType').value = 'gcn'; test.selectPdf([gcn]);
+    test.node('pdfUploadType').value = 'cccd'; test.selectPdf([cccd]);
+    assert.strictEqual(test.state.directPdfFiles.gcn, gcn);
+    assert.strictEqual(test.state.directPdfFiles.cccd, cccd);
+    await test.save();
+    const payload = saves(test)[0].payload;
+    assert.strictEqual(payload.fileName, 'GCN_scan_san.pdf');
+    assert.strictEqual(payload.fileNameCCCD, 'CCCD_scan_san.pdf');
+    assert.strictEqual(payload.pdfGCNBase64, test.state.directPdfFiles.gcn.dataUri);
+    assert.strictEqual(payload.pdfCCCDBase64, test.state.directPdfFiles.cccd.dataUri);
+    assert(!has(payload, 'pdfOriginalBase64'));
+    assert.strictEqual(payload.pageCount, 2);
+    assert.strictEqual(test.exports.length, 0, 'Direct PDFs must not enter the image/PDF exporter.');
+    assert.strictEqual(test.performanceLogs[0].pdfBytesSent, 391356);
+    test.clearPdf('gcn');
+    assert.strictEqual(test.state.directPdfFiles.gcn, null);
+    assert.strictEqual(test.state.directPdfFiles.cccd, cccd);
+    resetAfter(test);
+  }
 }
 
 (async function () {
@@ -510,5 +545,5 @@ async function verifyPage(page) {
     try { await verifyPage(page); }
     catch (error) { error.message = page + ': ' + error.message; throw error; }
   }
-  console.log('PASS: six-page PDF staging/cache, no artificial save timeout, 200/300/400 dpi, partial/group retry, lost-response status, legacy same-row fallback, metadata-only updates and camera pause');
+  console.log('PASS: six-page PDF staging/cache, direct scanned-PDF upload, no artificial save timeout, 200/300/400 dpi, partial/group retry, lost-response status, legacy same-row fallback, metadata-only updates and camera pause');
 })().catch(function (error) { console.error(error); process.exitCode = 1; });
