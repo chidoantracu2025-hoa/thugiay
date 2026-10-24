@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Báo Cáo Tổng Hợp Dữ Liệu Đất Đai - 17 Xã/Thị Trấn</title>
+  <!-- PapaParse parse CSV cực nhanh và chuẩn xác -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    :root {
+      --primary: #1e3a8a;
+      --primary-light: #3b82f6;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --highlight: #eff6ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 20px; }
+    .container { max-width: 100%; margin: 0 auto; }
+    
+    header {
+      background: var(--card-bg);
+      padding: 20px 24px;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      margin-bottom: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 15px;
+    }
+    h1 { font-size: 1.4rem; color: var(--primary); font-weight: 700; }
+    .subtitle { font-size: 0.88rem; color: var(--text-muted); margin-top: 4px; }
+    
+    .actions { display: flex; gap: 10px; align-items: center; }
+    button {
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: #172554; }
+    .btn-secondary { background: #e2e8f0; color: #334155; }
+    .btn-secondary:hover { background: #cbd5e1; }
+    .btn-success { background: #15803d; color: white; }
+    .btn-success:hover { background: #166534; }
+
+    /* Progress bar */
+    .progress-box {
+      background: var(--card-bg);
+      padding: 16px 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .progress-bar-bg {
+      background: #e2e8f0;
+      height: 10px;
+      border-radius: 99px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .progress-bar-fill {
+      background: #2563eb;
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* Matrix Table Container */
+    .table-card {
+      background: var(--card-bg);
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .table-scroll {
+      overflow-x: auto;
+      max-height: 75vh;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    th, td {
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      text-align: right;
+    }
+    th {
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    /* Fixed first column (Tình trạng) */
+    th.first-col, td.first-col {
+      text-align: left;
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: #ffffff;
+      font-weight: 600;
+      min-width: 200px;
+    }
+    th.first-col { z-index: 3; background: #f1f5f9; }
+    
+    /* Fixed total column & row */
+    .total-col { background: #f8fafc; font-weight: 700; color: #1e3a8a; }
+    .total-row td {
+      background: #f1f5f9;
+      font-weight: 700;
+      position: sticky;
+      bottom: 0;
+      z-index: 2;
+      border-top: 2px solid #cbd5e1;
+    }
+    .total-row td.first-col { z-index: 4; }
+
+    /* Clickable cell */
+    .clickable-val {
+      color: #2563eb;
+      text-decoration: underline;
+      cursor: pointer;
+      font-weight: 600;
+      border-radius: 4px;
+      padding: 2px 6px;
+    }
+    .clickable-val:hover {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+    .zero-val { color: #cbd5e1; }
+
+    /* Modal Details */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      padding: 20px;
+    }
+    .modal-content {
+      background: #ffffff;
+      width: 95%;
+      max-width: 1100px;
+      max-height: 90vh;
+      border-radius: 14px;
+      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 16px 22px;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; color: var(--primary); }
+    .modal-body {
+      padding: 16px 20px;
+      overflow: auto;
+      flex: 1;
+    }
+    .modal-footer {
+      padding: 14px 20px;
+      background: #f8fafc;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .close-btn { background: none; border: none; font-size: 1.5rem; color: #64748b; cursor: pointer; }
+    .close-btn:hover { color: #0f172a; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div>
+      <h1>BÁO CÁO TỔNG HỢP TIẾN ĐỘ ĐẤT ĐAI</h1>
+      <div class="subtitle">Dữ liệu thời gian thực từ 17 xã/thị trấn theo nhóm Tình trạng xử lý (Cột A)</div>
+    </div>
+    <div class="actions">
+      <button class="btn-primary" onclick="loadAllData()">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+        Tải / Làm mới Dữ liệu
+      </button>
+      <button class="btn-secondary" onclick="exportMatrixToCSV()">Xuất bảng tổng hợp CSV</button>
+    </div>
+  </header>
+
+  <div class="progress-box" id="progressBox" style="display: none;">
+    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600;">
+      <span id="progressText">Đang kết nối dữ liệu...</span>
+      <span id="progressPercent">0%</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progressBar"></div>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="table-scroll">
+      <table id="matrixTable">
+        <thead>
+          <tr id="tableHeader">
+            <th class="first-col">Tình trạng xử lý (Cột A)</th>
+            <!-- Các cột xã sẽ render tự động -->
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr>
+            <td colspan="20" style="text-align: center; padding: 40px; color: var(--text-muted);">
+              Bấm nút <b>"Tải / Làm mới Dữ liệu"</b> để bắt đầu quét 17 xã.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal hiển thị & tải danh sách chi tiết -->
+<div class="modal-backdrop" id="detailModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="modalTitle">Danh sách chi tiết</div>
+        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 3px;" id="modalSubtitle"></div>
+      </div>
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <table id="detailTable">
+        <thead id="detailHeader"></thead>
+        <tbody id="detailBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <span id="modalRecordCount" style="font-size: 0.88rem; font-weight: 600; color: #475569;"></span>
+      <div>
+        <button class="btn-secondary" onclick="closeModal()">Đóng</button>
+        <button class="btn-success" id="btnDownloadDetail" onclick="downloadCurrentDetailCSV()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+          Tải file CSV danh sách này
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// 1. Cấu hình 17 xã kèm link xuất CSV chuẩn từ file Thiết Lập.xlsx
+const COMMUNES = [
+  { name: "Xã An Quảng Hữu", url: "https://docs.google.com/spreadsheets/d/1H4O4XTf0maTYvToM619AsgrZWkuD1lODr3CIrLKH2lo/export?format=csv&gid=973797750" },
+  { name: "Xã Đại An", url: "https://docs.google.com/spreadsheets/d/1x0QIoBTJr2Ex3XficVmAfJnAzQg18tecvou4bxJ8uqU/export?format=csv&gid=1952417615" },
+  { name: "Xã Định An", url: "https://docs.google.com/spreadsheets/d/12PqNjuDwhZF-XeuTc0Z_aQN-UQKRJfWZxnxvxbFvjmA/export?format=csv&gid=415038902" },
+  { name: "Xã Hàm Giang Cũ", url: "https://docs.google.com/spreadsheets/d/18CJW1m8vkvmV8JV-DcE1yl0EvXU9OAyIGi8HvDK4Jxk/export?format=csv&gid=1026998676" },
+  { name: "Xã Hàm Giang Mới", url: "https://docs.google.com/spreadsheets/d/1Gi1G3UoBOFql-Hjr-N0nza8Gb79RCcFJCYzi8zf_Uao/export?format=csv" },
+  { name: "Xã Kim Sơn", url: "https://docs.google.com/spreadsheets/d/1kZWOy6AGRxptXhv1T-uhyA9-9xsDs9Fk1f-SFLeNRGU/export?format=csv&gid=634378014" },
+  { name: "Xã Long Hiệp", url: "https://docs.google.com/spreadsheets/d/1K29xMBGtJNNMgj6a2NHrfGrGFmhJLf4wJIOUnEH4YOE/export?format=csv&gid=525012428" },
+  { name: "Xã Lưu Nghiệp Anh", url: "https://docs.google.com/spreadsheets/d/12pEs5pvp_O_X1KjsPw7g1I5Va9Gmq8JkF80PRr4jFHI/export?format=csv&gid=468556518" },
+  { name: "Xã Ngãi Xuyên", url: "https://docs.google.com/spreadsheets/d/1Njv3DtpP0L3Hhu8ifoEFP75O2X3K722mLvpGJ5BieWQ/export?format=csv" },
+  { name: "Xã Ngọc Biên", url: "https://docs.google.com/spreadsheets/d/1BjipW2wz2V0RypHSCzB3AhH8tSDQei9nS1xWqfHkxIw/export?format=csv" },
+  { name: "Xã Phước Hưng", url: "https://docs.google.com/spreadsheets/d/1N_yXtWF6CgZx6fmPSiuzH8ywvpTbs0PqdhrkzKKiylE/export?format=csv" },
+  { name: "Xã Tân Hiệp", url: "https://docs.google.com/spreadsheets/d/18aHIet5wigQOUqK5Bj72If61K5zQa7yfkhW9JN0Vxpo/export?format=csv" },
+  { name: "Xã Tân Sơn", url: "https://docs.google.com/spreadsheets/d/1AsZ20WgU_XEVfJWs-D5Z7TDmk0KSZpJn8bdqFOi1L8w/export?format=csv&gid=916427810" },
+  { name: "Xã Tập Sơn", url: "https://docs.google.com/spreadsheets/d/1qNA77YPw31gMqsOM74Y1VRj46PswUgGaIICJlFSaqEs/export?format=csv&gid=749196967" },
+  { name: "Xã Thanh Sơn", url: "https://docs.google.com/spreadsheets/d/1SuNlj-WfDvbCTsEXXHFqO0AkZB_1aIfBEiqOebWZY5k/export?format=csv" },
+  { name: "Thị Trấn Định An", url: "https://docs.google.com/spreadsheets/d/1lswiINR-Aa5-7IQinwmV9_jg6l7ZvJkC/export?format=csv" },
+  { name: "Thị Trấn Trà Cú", url: "https://docs.google.com/spreadsheets/d/1JZQG_0b6UZ9AZcW6gtV4DUJ7qRB3NoJpUzlVTGdnyEQ/export?format=csv" }
+];
+
+// 2. Danh mục chuẩn các tình trạng xử lý từ Trang tính1
+const STANDARD_STATUSES = [
+  "Đã xử lý", "CSD đã chết", "Chưa có GCN", "Không có mã định danh", "Hồ sơ quét bị lỗi",
+  "Tìm Kê khai không thấy", "Không có hồ sơ quét", "GCN chưa ký số", "Chỉ có đơn đăng ký xét cấp",
+  "Hồ sơ chỉ có sổ địa chính", "HSQ không có GCN", "Giấy CN chưa trao", "Chưa cấp GCN",
+  "GCN không xác định chủ", "thiếu thông tin GDBĐ", "Không có CMND", "Tách GCN",
+  "Phương án tặng cho", "Đất tổ chức", "Chưa xác định / Khác"
+];
+
+// Bộ nhớ đệm dữ liệu: communeIndex -> { rawRows: [], headers: [], statusGroups: { [status]: [rows] } }
+let dataset = {};
+let currentModalRecords = [];
+let currentModalFilename = "danh_sach.csv";
+
+// Hàm chuẩn hóa chuỗi
+function normalizeText(str) {
+  if (!str) return "";
+  return str.toString().trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Tìm tình trạng khớp
+function mapStatus(statusText) {
+  if (!statusText || !statusText.toString().trim()) return "Chưa xác định / Khác";
+  const sNorm = normalizeText(statusText);
+  for (let s of STANDARD_STATUSES) {
+    if (s === "Chưa xác định / Khác") continue;
+    if (normalizeText(s) === sNorm) return s;
+  }
+  return statusText.toString().trim(); // Nếu có tình trạng phát sinh mới ngoài danh mục
+}
+
+// Fetch CSV kèm giải pháp proxy nếu gặp lỗi CORS
+async function fetchCSV(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.text();
+  } catch (err) {
+    console.warn("Truy cập trực tiếp bị chặn CORS, thử qua proxy...", url);
+    const proxyUrl = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+    const res2 = await fetch(proxyUrl);
+    if (!res2.ok) throw new Error("Proxy error");
+    return await res2.text();
+  }
+}
+
+// Tải toàn bộ dữ liệu 17 xã
+async function loadAllData() {
+  const pBox = document.getElementById("progressBox");
+  const pBar = document.getElementById("progressBar");
+  const pText = document.getElementById("progressText");
+  const pPercent = document.getElementById("progressPercent");
+  pBox.style.display = "block";
+  dataset = {};
+
+  let completed = 0;
+  for (let i = 0; i < COMMUNES.length; i++) {
+    const com = COMMUNES[i];
+    pText.innerText = `Đang tải: ${com.name} (${i + 1}/${COMMUNES.length})...`;
+    pPercent.innerText = Math.round((i / COMMUNES.length) * 100) + "%";
+    pBar.style.width = pPercent.innerText;
+
+    try {
+      const csvText = await fetchCSV(com.url);
+      const parsed = Papa.parse(csvText, { skipEmptyLines: true });
+      const rows = parsed.data || [];
+
+      if (rows.length > 0) {
+        const headers = rows[0];
+        const dataRows = rows.slice(1);
+        
+        // Phân loại theo cột A (index 0)
+        const groups = {};
+        dataRows.forEach(row => {
+          const colAVal = row[0] ? row[0] : "";
+          const matchedStatus = mapStatus(colAVal);
+          if (!groups[matchedStatus]) groups[matchedStatus] = [];
+          groups[matchedStatus].push(row);
+        });
+
+        dataset[i] = {
+          commune: com.name,
+          headers: headers,
+          rows: dataRows,
+          groups: groups
+        };
+      } else {
+        dataset[i] = { commune: com.name, headers: [], rows: [], groups: {} };
+      }
+    } catch (e) {
+      console.error(`Lỗi tải dữ liệu ${com.name}:`, e);
+      dataset[i] = { commune: com.name, headers: [], rows: [], groups: {}, error: true };
+    }
+
+    completed++;
+  }
+
+  pBar.style.width = "100%";
+  pPercent.innerText = "100%";
+  pText.innerText = "Tải dữ liệu hoàn tất!";
+  setTimeout(() => { pBox.style.display = "none"; }, 800);
+
+  renderMatrixTable();
+}
+
+// Kết xuất bảng ma trận tổng hợp
+function renderMatrixTable() {
+  const thead = document.getElementById("tableHeader");
+  const tbody = document.getElementById("tableBody");
+
+  // Thu thập toàn bộ các nhóm tình trạng thực tế có trong dữ liệu
+  const allStatusSet = new Set(STANDARD_STATUSES);
+  Object.values(dataset).forEach(data => {
+    if (data.groups) {
+      Object.keys(data.groups).forEach(st => allStatusSet.add(st));
+    }
+  });
+  const statusList = Array.from(allStatusSet);
+
+  // Tạo tiêu đề cột: Cột A (Tình trạng) + 17 Xã + Cột Tổng cộng
+  let headHtml = `<th class="first-col">Tình trạng xử lý (Cột A)</th>`;
+  COMMUNES.forEach((c, idx) => {
+    headHtml += `<th>${c.name}</th>`;
+  });
+  headHtml += `<th class="total-col">Tổng Cộng</th>`;
+  thead.innerHTML = headHtml;
+
+  // Tính tổng theo từng xã (cột)
+  const colTotals = new Array(COMMUNES.length).fill(0);
+  let grandTotal = 0;
+
+  let bodyHtml = "";
+  statusList.forEach(status => {
+    let rowTotal = 0;
+    let rowCells = "";
+
+    COMMUNES.forEach((c, idx) => {
+      const comData = dataset[idx];
+      const count = (comData && comData.groups && comData.groups[status]) ? comData.groups[status].length : 0;
+      rowTotal += count;
+      colTotals[idx] += count;
+
+      if (count > 0) {
+        rowCells += `<td><span class="clickable-val" onclick="showDetails(${idx}, '${escapeQuotes(status)}')">${count.toLocaleString()}</span></td>`;
+      } else {
+        rowCells += `<td class="zero-val">0</td>`;
+      }
+    });
+
+    grandTotal += rowTotal;
+
+    // Chỉ hiển thị các dòng có dữ liệu hoặc thuộc nhóm chuẩn
+    bodyHtml += `
+      <tr>
+        <td class="first-col">${status}</td>
+        ${rowCells}
+        <td class="total-col">
+          ${rowTotal > 0 ? `<span class="clickable-val" onclick="showStatusTotalDetails('${escapeQuotes(status)}')">${rowTotal.toLocaleString()}</span>` : '0'}
+        </td>
+      </tr>
+    `;
+  });
+
+  // Hàng tổng cộng (Chân bảng)
+  let footerHtml = `
+    <tr class="total-row">
+      <td class="first-col">TỔNG TOÀN XÃ</td>
+      ${colTotals.map((tot, idx) => `<td><span class="clickable-val" onclick="showCommuneTotalDetails(${idx})">${tot.toLocaleString()}</span></td>`).join("")}
+      <td class="total-col">${grandTotal.toLocaleString()}</td>
+    </tr>
+  `;
+
+  tbody.innerHTML = bodyHtml + footerHtml;
+}
+
+function escapeQuotes(str) {
+  return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// 3. Hiển thị Popup và danh sách chi tiết
+function showDetails(communeIdx, status) {
+  const comData = dataset[communeIdx];
+  if (!comData || !comData.groups[status]) return;
+
+  const rows = comData.groups[status];
+  const headers = comData.headers;
+
+  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name}`;
+  document.getElementById("modalSubtitle").innerText = `Tình trạng: "${status}" - Tổng cộng: ${rows.length} hồ sơ`;
+  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${rows.length} dòng dữ liệu`;
+
+  currentModalRecords = [headers, ...rows];
+  currentModalFilename = `${COMMUNES[communeIdx].name}_${status}.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
+
+  renderDetailTable(headers, rows);
+  document.getElementById("detailModal").style.display = "flex";
+}
+
+// Xem tổng của 1 trạng thái trên cả 17 xã
+function showStatusTotalDetails(status) {
+  let combinedRows = [];
+  let commonHeaders = [];
+
+  COMMUNES.forEach((c, idx) => {
+    const comData = dataset[idx];
+    if (comData && comData.groups[status]) {
+      if (commonHeaders.length === 0) commonHeaders = ["Tên Xã", ...comData.headers];
+      comData.groups[status].forEach(r => combinedRows.push([c.name, ...r]));
+    }
+  });
+
+  document.getElementById("modalTitle").innerText = `Tất cả 17 xã - Tình trạng: ${status}`;
+  document.getElementById("modalSubtitle").innerText = `Tổng số lượng: ${combinedRows.length} hồ sơ`;
+  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${combinedRows.length} dòng dữ liệu`;
+
+  currentModalRecords = [commonHeaders, ...combinedRows];
+  currentModalFilename = `TongHop17Xa_${status}.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
+
+  renderDetailTable(commonHeaders, combinedRows);
+  document.getElementById("detailModal").style.display = "flex";
+}
+
+// Xem toàn bộ của 1 xã
+function showCommuneTotalDetails(communeIdx) {
+  const comData = dataset[communeIdx];
+  if (!comData) return;
+
+  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name} - Toàn bộ hồ sơ`;
+  document.getElementById("modalSubtitle").innerText = `Tổng số lượng: ${comData.rows.length} hồ sơ`;
+  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${comData.rows.length} dòng dữ liệu`;
+
+  currentModalRecords = [comData.headers, ...comData.rows];
+  currentModalFilename = `${COMMUNES[communeIdx].name}_TatCa.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
+
+  renderDetailTable(comData.headers, comData.rows);
+  document.getElementById("detailModal").style.display = "flex";
+}
+
+function renderDetailTable(headers, rows) {
+  const thead = document.getElementById("detailHeader");
+  const tbody = document.getElementById("detailBody");
+
+  thead.innerHTML = `<tr>${headers.map(h => `<th>${h || ''}</th>`).join('')}</tr>`;
+
+  // Giới hạn hiển thị 150 dòng đầu tiên trên web để mượt mà (file tải về vẫn đủ 100%)
+  const displayRows = rows.slice(0, 150);
+  tbody.innerHTML = displayRows.map(row => 
+    `<tr>${row.map(c => `<td>${c || ''}</td>`).join('')}</tr>`
+  ).join('');
+
+  if (rows.length > 150) {
+    tbody.innerHTML += `<tr><td colspan="${headers.length}" style="text-align: center; color: #dc2626; font-weight: 600; padding: 12px;">... Đã ẩn bớt để tối ưu tốc độ trình duyệt. Vui lòng bấm nút "Tải file CSV danh sách này" để xem đầy đủ tất cả ${rows.length} dòng.</td></tr>`;
+  }
+}
+
+function closeModal() {
+  document.getElementById("detailModal").style.display = "none";
+}
+
+// 4. Xuất file CSV hỗ trợ tiếng Việt có dấu chuẩn Excel (BOM UTF-8)
+function downloadCSV(csvContent, filename) {
+  const BOM = "\uFEFF";
+  const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function downloadCurrentDetailCSV() {
+  if (!currentModalRecords || currentModalRecords.length === 0) return;
+  const csv = Papa.unparse(currentModalRecords);
+  downloadCSV(csv, currentModalFilename);
+}
+
+// Xuất toàn bộ bảng ma trận tổng hợp ra CSV
+function exportMatrixToCSV() {
+  const table = document.getElementById("matrixTable");
+  const rows = [];
+  for (let r of table.rows) {
+    const rowData = [];
+    for (let c of r.cells) {
+      rowData.push(c.innerText.replace(/\n/g, " ").trim());
+    }
+    rows.push(rowData);
+  }
+  const csv = Papa.unparse(rows);
+  downloadCSV(csv, "BaoCao_TongHop_17Xa.csv");
+}
+
+// Tự động kích hoạt tải dữ liệu ngay khi mở trang
+window.addEventListener("DOMContentLoaded", () => {
+  loadAllData();
+});
+</script>
+</body>
+</html>
