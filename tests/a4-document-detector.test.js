@@ -114,4 +114,17 @@ function image(width, height, pixel) {
     'Neutral stone/tile support recovers the other half without relying on background hue.');
 }
 
+{
+  const width = 320, height = 240;
+  const sourceImage = image(width, height, () => [180, 180, 180]);
+  const canvas = { width, height, getContext: () => ({ getImageData: () => sourceImage }) };
+  const leftPage = { x: 42, y: 62, width: 124, height: 120, corners: [
+    { x: 42, y: 62 }, { x: 166, y: 62 }, { x: 166, y: 182 }, { x: 42, y: 182 }
+  ] };
+  const recovered = detector.recoverSpread(canvas, leftPage);
+  assert(recovered && recovered.detected, 'A centered open spread remains recoverable when the support is neutral.');
+  assert(recovered.x <= 42 && recovered.x + recovered.width >= 285,
+    'The missing half is extended by the detected page width, not to an arbitrary frame margin.');
+}
+
 console.log('A4/A3 detector: mixed, aged and torn paper is retained over blue/green support surfaces.');

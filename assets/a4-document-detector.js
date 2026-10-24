@@ -261,11 +261,14 @@
       // guarded frame-boundary estimate, retaining the perspective of the
       // detected half instead of discarding the document entirely.
       const pageAreaRatio = (page.width * page.height) / (sourceWidth * sourceHeight);
-      if (pageAreaRatio < 0.14 || page.height < sourceHeight * 0.48) return null;
-      recoveredX = missingLeft ? sourceWidth * 0.08 : sourceWidth * 0.92;
+      if (pageAreaRatio < 0.08 || page.height < sourceHeight * 0.28) return null;
+      // For a centrally framed open certificate, continue the missing half by
+      // one detected page-width. Do not jump to a fixed image margin: the
+      // table/floor around the document can be much larger than the document.
+      recoveredX = missingLeft ? page.x - page.width : page.x + page.width * 2;
       recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
-      if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) return null;
-      usedFrameEstimate = true;
+      if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.30 ||
+          recoveredX < 0 || recoveredX >= sourceWidth) return null;
     }
     const corners = page.corners;
     function lineY(first, second, x) {
@@ -522,6 +525,48 @@
     } catch (_) { return null; }
   }
 
+  function refineSpreadOuterSide(sourceCanvas, corners, missingLeft) {
+    if (!sourceCanvas || !corners || corners.length !== 4) return null;
+    try {
+      const scale = Math.min(1, 1000 / Math.max(sourceCanvas.width, sourceCanvas.height));
+      const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+      const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+      const probe = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(width, height)
+        : (typeof document !== 'undefined' ? document.createElement('canvas') : null);
+      if (!probe) return null;
+      probe.width = width; probe.height = height;
+      const context = probe.getContext('2d', { willReadFrequently: true });
+      context.drawImage(sourceCanvas, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const scaled = corners.map(point => ({ x: point.x * scale, y: point.y * scale }));
+      const firstIndex = missingLeft ? 0 : 1, secondIndex = missingLeft ? 3 : 2;
+      const first = scaled[firstIndex], second = scaled[secondIndex];
+      const radius = Math.max(8, width * 0.10);
+      let bestX = (first.x + second.x) / 2, bestScore = 0;
+      for (let x = Math.max(0, Math.floor(bestX - radius)); x < Math.min(width - 1, bestX + radius); x++) {
+        let score = 0, count = 0;
+        for (let step = 0.12; step <= 0.88; step += 0.025) {
+          const y = Math.round(first.y + (second.y - first.y) * step);
+          const offset = (y * width + x) * 4;
+          score += Math.abs(pixels[offset] - pixels[offset + 4]) +
+            Math.abs(pixels[offset + 1] - pixels[offset + 5]) +
+            Math.abs(pixels[offset + 2] - pixels[offset + 6]);
+          count++;
+        }
+        const average = score / Math.max(1, count);
+        if (average > bestScore) { bestScore = average; bestX = x; }
+      }
+      if (bestScore < 4 || Math.abs(bestX - (first.x + second.x) / 2) > radius * 0.98) return null;
+      const refinedFirst = { x: bestX / scale, y: first.y / scale };
+      const refinedSecond = { x: bestX / scale, y: second.y / scale };
+      const result = corners.map(point => ({ x: point.x, y: point.y }));
+      result[firstIndex] = refinedFirst;
+      result[secondIndex] = refinedSecond;
+      return result;
+    } catch (_) { return null; }
+  }
+
   function detectSpreadQuad(cv, source, sourceCanvas, scale) {
     if (!cv || !source || !source.data || !sourceCanvas || !cv.Mat) return null;
     const width = source.cols, height = source.rows;
@@ -721,6 +766,28 @@
       if (options.preferSpread && (!best || polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) < 0.48)) {
         const spreadQuad = detectSpreadQuad(cv, source, sourceCanvas, scale);
         if (spreadQuad && (!best || polygonArea(spreadQuad.corners) > polygonArea(best.corners) * 1.10)) best = spreadQuad;
+      }
+      if (options.preferSpread && best && best.corners) {
+        const bestArea = polygonArea(best.corners);
+        const bestCenterX = best.x + best.width / 2;
+        const oneSided = bestArea / (sourceCanvas.width * sourceCanvas.height) < 0.58 &&
+          (bestCenterX < sourceCanvas.width * 0.40 || bestCenterX > sourceCanvas.width * 0.60);
+        if (oneSided) {
+          let recovered = recoverSpread(sourceCanvas, best);
+          if (recovered && recovered.detectionVariant === 'spread-support') {
+            const missingLeft = best.x + best.width / 2 > sourceCanvas.width * 0.60;
+            const refined = refineSpreadOuterSide(sourceCanvas, recovered.corners, missingLeft);
+            if (refined) {
+              const xs = refined.map(point => point.x), ys = refined.map(point => point.y);
+              const x = Math.max(0, Math.floor(Math.min(...xs))), y = Math.max(0, Math.floor(Math.min(...ys)));
+              recovered = { ...recovered, corners: refined, x, y,
+                width: Math.min(sourceCanvas.width, Math.ceil(Math.max(...xs))) - x,
+                height: Math.min(sourceCanvas.height, Math.ceil(Math.max(...ys))) - y };
+            }
+          }
+          if (recovered && polygonArea(recovered.corners) > bestArea * 1.25 &&
+              polygonArea(recovered.corners) < sourceCanvas.width * sourceCanvas.height * 0.92) best = recovered;
+        }
       }
       if (options.preferSpread && best && best.corners && best.paperConfidence < 0.8 &&
           best.detectionVariant !== 'spread-border-quad') {
