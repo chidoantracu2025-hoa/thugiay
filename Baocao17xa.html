@@ -284,7 +284,7 @@ const COMMUNES = [
   { name: "Xã Hàm Giang Mới", url: "https://docs.google.com/spreadsheets/d/1Gi1G3UoBOFql-Hjr-N0nza8Gb79RCcFJCYzi8zf_Uao/export?format=csv" },
   { name: "Xã Kim Sơn", url: "https://docs.google.com/spreadsheets/d/1kZWOy6AGRxptXhv1T-uhyA9-9xsDs9Fk1f-SFLeNRGU/export?format=csv&gid=634378014" },
   { name: "Xã Long Hiệp", url: "https://docs.google.com/spreadsheets/d/1K29xMBGtJNNMgj6a2NHrfGrGFmhJLf4wJIOUnEH4YOE/export?format=csv&gid=525012428" },
-  { name: "Xã Lưu Nghiệp Anh", url: "https://docs.google.com/spreadsheets/d/12pEs5pvp_O_X1KjsPw7g1I5Va9Gmq8JkF80PRr4jFHI/export?format=csv&gid=468556518" },
+  { name: "Xã Lưu Nghiệp Anh", url: "https://docs.google.com/spreadsheets/d/12pEs5pvp_O_X1KjsPw7g1I5Va9Gmq8JkF80PRr4jFHI/export?format=csv" },
   { name: "Xã Ngãi Xuyên", url: "https://docs.google.com/spreadsheets/d/1Njv3DtpP0L3Hhu8ifoEFP75O2X3K722mLvpGJ5BieWQ/export?format=csv" },
   { name: "Xã Ngọc Biên", url: "https://docs.google.com/spreadsheets/d/1BjipW2wz2V0RypHSCzB3AhH8tSDQei9nS1xWqfHkxIw/export?format=csv" },
   { name: "Xã Phước Hưng", url: "https://docs.google.com/spreadsheets/d/1N_yXtWF6CgZx6fmPSiuzH8ywvpTbs0PqdhrkzKKiylE/export?format=csv" },
@@ -297,6 +297,7 @@ const COMMUNES = [
 ];
 
 const STATUS_SOURCE_URL = "https://docs.google.com/spreadsheets/d/1N9RGGf3ZdYqMcrUe89gUuJbK8Q6l1TpFSLsbidwTuvQ/export?format=csv&gid=0";
+const COMMUNE_DATA_START_ROW = 7;
 
 // Dữ liệu theo xã: communeIndex -> { headers: [], rows: [] }
 let dataset = {};
@@ -348,12 +349,13 @@ async function loadAllData() {
 
     try {
       const csvText = await fetchCSV(com.url);
-      const parsed = Papa.parse(csvText, { skipEmptyLines: true });
+      // Giữ cả các dòng trống để mẫu số phản ánh toàn bộ dòng từ dòng 7 của trang tính.
+      const parsed = Papa.parse(csvText);
       const rows = parsed.data || [];
 
       if (rows.length > 0) {
         const headers = rows[0];
-        const dataRows = rows.slice(1);
+        const dataRows = rows.slice(COMMUNE_DATA_START_ROW - 1);
         
         dataset[i] = {
           commune: com.name,
