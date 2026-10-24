@@ -703,6 +703,12 @@
       const mode = state.scanMode;
       const settings = { documentFormat: 'a3', optimize: true, dpi: state.qualityDpi || 400, ...options };
       await yieldToInterface();
+      if (settings.captureSource === 'upload' && settings.preferSpread) {
+        await ensureOpenCv();
+        const uploadSource = source && typeof source.getContext === 'function' ? source : document.createElement('canvas');
+        if (uploadSource !== source) { uploadSource.width = source.width; uploadSource.height = source.height; uploadSource.getContext('2d').drawImage(source, 0, 0); }
+        return prepareScan(uploadSource, settings, mode);
+      }
       const client = getScanClient();
       if (client && client.available) {
         const bitmap = await createImageBitmap(source);
@@ -715,6 +721,11 @@
             const context = canvas.getContext('2d');
             if (!context) throw new Error('Thiết bị không đủ bộ nhớ để giữ ảnh.');
             context.drawImage(result.bitmap, 0, 0);
+            if (!result.detected && settings.preferSpread) {
+              await ensureOpenCv();
+              const retry = prepareScan(source, { ...settings, lighting: false }, mode);
+              if (retry && retry.detected) return retry;
+            }
             return { canvas, detected: result.detected, method: result.method, quality: result.quality,
               dpi: result.dpi, effectiveDpi: result.effectiveDpi, lighting: result.lighting, timings: result.timings };
           } finally { result.bitmap.close(); }

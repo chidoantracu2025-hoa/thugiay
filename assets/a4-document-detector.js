@@ -95,6 +95,50 @@
     return true;
   }
 
+  // Build a conservative document mask from the image border. This covers
+  // neutral tables and faded paper where hue-based separation is unavailable.
+  // It is intentionally only a candidate generator; fitOutline still applies
+  // the area, solidity, edge and aspect-ratio checks before accepting it.
+  function fillBorderContrastMask(source, mask) {
+    if (!source || !source.data || !mask || !mask.data) return false;
+    const width = source.cols;
+    const height = source.rows;
+    const pixels = source.data;
+    // Sample the four corners independently, not the full image border: on
+    // open certificates the paper itself often touches most of that border.
+    // A bilinear support-colour model also follows broad floor shadows.
+    const patch = Math.max(4, Math.round(Math.min(width, height) * 0.04));
+    const cornerColors = [[0, 0], [width - patch, 0], [0, height - patch], [width - patch, height - patch]].map(([left, top]) => {
+      const channels = [[], [], []];
+      for (let y = top; y < Math.min(height, top + patch); y += 2) {
+        for (let x = left; x < Math.min(width, left + patch); x += 2) {
+          const offset = (y * width + x) * 4;
+          for (let channel = 0; channel < 3; channel++) channels[channel].push(pixels[offset + channel]);
+        }
+      }
+      return channels.map(values => {
+        values.sort((first, second) => first - second);
+        return values[Math.floor(values.length * 0.5)] || 0;
+      });
+    });
+    const threshold = 38;
+    let foreground = 0;
+    for (let index = 0, offset = 0; index < mask.data.length; index++, offset += 4) {
+      const x = index % width, y = Math.floor(index / width);
+      const horizontal = x / Math.max(1, width - 1), vertical = y / Math.max(1, height - 1);
+      const expected = [0, 1, 2].map(channel => {
+        const top = cornerColors[0][channel] * (1 - horizontal) + cornerColors[1][channel] * horizontal;
+        const bottom = cornerColors[2][channel] * (1 - horizontal) + cornerColors[3][channel] * horizontal;
+        return top * (1 - vertical) + bottom * vertical;
+      });
+      const distance = Math.hypot(pixels[offset] - expected[0], pixels[offset + 1] - expected[1], pixels[offset + 2] - expected[2]);
+      const keep = distance >= threshold;
+      mask.data[index] = keep ? 255 : 0;
+      if (keep) foreground++;
+    }
+    return foreground >= mask.data.length * 0.055 && foreground <= mask.data.length * 0.88;
+  }
+
   // Recover the missing half of an open certificate when the regular contour
   // detector locks onto only one page. It samples a narrow, low-resolution
   // raster and extends the detected page only across columns that consistently
@@ -198,6 +242,7 @@
     }
     let edge = missingLeft ? Math.max(0, Math.floor(px)) : Math.min(width - 1, Math.ceil(px + pw));
     let gap = 0, boundary = edge;
+    let usedFrameEstimate = false;
     if (missingLeft) for (let x = edge - 1; x >= 0; x--) {
       if (hits[x] >= requiredHits) { boundary = x; gap = 0; }
       else if (++gap > 3) break;
@@ -206,18 +251,39 @@
       else if (++gap > 3) break;
     }
     edge = boundary;
-    const recoveredX = edge / scale;
-    const recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
-    if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) return null;
+    let recoveredX = edge / scale;
+    let recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
+    if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) {
+      // When the support and the faded certificate have nearly identical
+      // colours, no column can be classified reliably. The sample photos are
+      // nevertheless a clear open spread: one tall page occupies most of the
+      // frame and the missing half runs toward the opposite frame edge. Use a
+      // guarded frame-boundary estimate, retaining the perspective of the
+      // detected half instead of discarding the document entirely.
+      const pageAreaRatio = (page.width * page.height) / (sourceWidth * sourceHeight);
+      if (pageAreaRatio < 0.14 || page.height < sourceHeight * 0.48) return null;
+      recoveredX = missingLeft ? sourceWidth * 0.08 : sourceWidth * 0.92;
+      recoveredWidth = missingLeft ? page.x + page.width - recoveredX : recoveredX - page.x;
+      if (recoveredWidth < page.width * 1.45 || recoveredWidth < sourceWidth * 0.60) return null;
+      usedFrameEstimate = true;
+    }
     const corners = page.corners;
     function lineY(first, second, x) {
       return first.y + (second.y - first.y) * (x - first.x) / Math.max(1, second.x - first.x);
     }
-    const expanded = missingLeft
-      ? [{ x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) }, corners[1], corners[2],
-        { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }]
-      : [corners[0], { x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) },
-        { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }, corners[3]];
+    const frameTop = Math.max(0, Math.floor(page.y - sourceHeight * 0.08));
+    const frameBottom = Math.min(sourceHeight, Math.ceil(page.y + page.height + sourceHeight * 0.08));
+    const expanded = usedFrameEstimate
+      ? (missingLeft
+        ? [{ x: recoveredX, y: frameTop }, { x: page.x + page.width, y: frameTop },
+          { x: page.x + page.width, y: frameBottom }, { x: recoveredX, y: frameBottom }]
+        : [{ x: page.x, y: frameTop }, { x: recoveredX, y: frameTop },
+          { x: recoveredX, y: frameBottom }, { x: page.x, y: frameBottom }])
+      : (missingLeft
+        ? [{ x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) }, corners[1], corners[2],
+          { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }]
+        : [corners[0], { x: recoveredX, y: lineY(corners[0], corners[1], recoveredX) },
+          { x: recoveredX, y: lineY(corners[3], corners[2], recoveredX) }, corners[3]]);
     const xs = expanded.map(point => point.x), ys = expanded.map(point => point.y);
     const x = Math.max(0, Math.floor(Math.min(...xs))), y = Math.max(0, Math.floor(Math.min(...ys)));
     const right = Math.min(sourceWidth, Math.ceil(Math.max(...xs))), bottomEdge = Math.min(sourceHeight, Math.ceil(Math.max(...ys)));
@@ -310,6 +376,242 @@
     }
   }
 
+  // Dedicated outer-quad recovery for open certificates over a low-contrast
+  // support. The regular A4/A3 candidate rules stay unchanged; this candidate
+  // is considered only for spread scans after those rules have run.
+  function refineSpreadBottomEdge(sourceCanvas, corners) {
+    if (!sourceCanvas || !corners || corners.length !== 4) return null;
+    let probe = null;
+    try {
+      const scale = Math.min(1, 1000 / Math.max(sourceCanvas.width, sourceCanvas.height));
+      const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+      const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+      probe = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(width, height)
+        : (typeof document !== 'undefined' ? document.createElement('canvas') : null);
+      if (!probe) return null;
+      probe.width = width; probe.height = height;
+      const context = probe.getContext('2d', { willReadFrequently: true });
+      context.drawImage(sourceCanvas, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const scaled = corners.map(point => ({ x: point.x * scale, y: point.y * scale }));
+      const left = Math.max(0, Math.floor(Math.min(scaled[0].x, scaled[1].x) - width * 0.10));
+      const right = Math.min(width - 1, Math.ceil(Math.max(scaled[0].x, scaled[1].x) + width * 0.10));
+      const estimatedBottom = (scaled[2].y + scaled[3].y) / 2;
+      const searchTop = Math.max(Math.floor(height * 0.58), Math.floor(estimatedBottom - height * 0.10));
+      const searchBottom = Math.min(height - 2, Math.ceil(estimatedBottom + height * 0.07));
+      let bestY = -1, bestScore = 0;
+      for (let y = searchTop; y <= searchBottom; y++) {
+        let score = 0, samples = 0;
+        for (let x = left; x <= right; x += 3) {
+          const first = (y * width + x) * 4, second = first + width * 4;
+          score += Math.abs(pixels[first] - pixels[second]) +
+            Math.abs(pixels[first + 1] - pixels[second + 1]) +
+            Math.abs(pixels[first + 2] - pixels[second + 2]);
+          samples++;
+        }
+        const average = score / Math.max(1, samples);
+        if (average > bestScore) { bestScore = average; bestY = y; }
+      }
+      // Require a coherent cross-page edge; texture and text tend to be less
+      // consistent across this broad horizontal span.
+      if (bestY < 0 || bestScore < 7) return null;
+      const edgeThreshold = Math.max(22, bestScore * 1.45);
+      const points = [];
+      for (let x = left; x <= right; x++) {
+        let strength = 0, edgeY = bestY;
+        for (let y = Math.max(0, bestY - 5); y <= Math.min(height - 2, bestY + 5); y++) {
+          const first = (y * width + x) * 4, second = first + width * 4;
+          const difference = Math.abs(pixels[first] - pixels[second]) +
+            Math.abs(pixels[first + 1] - pixels[second + 1]) +
+            Math.abs(pixels[first + 2] - pixels[second + 2]);
+          if (difference > strength) { strength = difference; edgeY = y; }
+        }
+        if (strength >= edgeThreshold) points.push({ x, y: edgeY });
+      }
+      if (points.length < (right - left) * 0.42) return null;
+      const gapLimit = Math.max(3, width * 0.025);
+      let runStart = 0, runEnd = 0, currentStart = 0;
+      for (let index = 1; index <= points.length; index++) {
+        if (index === points.length || points[index].x - points[index - 1].x > gapLimit) {
+          if (points[index - 1].x - points[currentStart].x > runEnd - runStart) {
+            runStart = points[currentStart].x; runEnd = points[index - 1].x;
+          }
+          currentStart = index;
+        }
+      }
+      const run = points.filter(point => point.x >= runStart && point.x <= runEnd);
+      if (runEnd - runStart < (scaled[1].x - scaled[0].x) * 0.62 || run.length < 12) return null;
+      const meanX = run.reduce((sum, point) => sum + point.x, 0) / run.length;
+      const meanY = run.reduce((sum, point) => sum + point.y, 0) / run.length;
+      const slope = run.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) /
+        Math.max(1, run.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0));
+      const intercept = meanY - slope * meanX;
+      const refined = [scaled[0], scaled[1],
+        { x: runEnd, y: slope * runEnd + intercept },
+        { x: runStart, y: slope * runStart + intercept }];
+      return refined.map(point => ({ x: point.x / scale, y: point.y / scale }));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // The regular contour fit can be pulled outward by a faint floor seam at
+  // the top of an old certificate. Refine only that edge when a long, coherent
+  // image edge is present; keep its already-good side and bottom corners.
+  function refineSpreadTopEdge(sourceCanvas, corners) {
+    if (!sourceCanvas || !corners || corners.length !== 4) return null;
+    try {
+      const scale = Math.min(1, 1000 / Math.max(sourceCanvas.width, sourceCanvas.height));
+      const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+      const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+      const probe = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(width, height)
+        : (typeof document !== 'undefined' ? document.createElement('canvas') : null);
+      if (!probe) return null;
+      probe.width = width; probe.height = height;
+      const context = probe.getContext('2d', { willReadFrequently: true });
+      context.drawImage(sourceCanvas, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const scaled = corners.map(point => ({ x: point.x * scale, y: point.y * scale }));
+      const left = Math.max(0, Math.floor(Math.min(scaled[0].x, scaled[1].x) - width * 0.10));
+      const right = Math.min(width - 1, Math.ceil(Math.max(scaled[0].x, scaled[1].x) + width * 0.10));
+      const estimatedTop = (scaled[0].y + scaled[1].y) / 2;
+      const searchTop = Math.max(0, Math.floor(estimatedTop - height * 0.12));
+      const searchBottom = Math.min(Math.floor(height * 0.24), Math.ceil(estimatedTop + height * 0.12));
+      const threshold = 12;
+      let best = null;
+      const gapLimit = Math.max(3, width * 0.02);
+      for (let y = searchTop; y <= searchBottom; y++) {
+        const hits = [];
+        for (let x = left; x <= right; x++) {
+          let strength = 0, edgeY = y;
+          for (let sampleY = Math.max(0, y - 2); sampleY <= Math.min(height - 2, y + 2); sampleY++) {
+            const first = (sampleY * width + x) * 4, second = first + width * 4;
+            const difference = Math.abs(pixels[first] - pixels[second]) +
+              Math.abs(pixels[first + 1] - pixels[second + 1]) +
+              Math.abs(pixels[first + 2] - pixels[second + 2]);
+            if (difference > strength) { strength = difference; edgeY = sampleY; }
+          }
+          if (strength >= threshold) hits.push({ x, y: edgeY, strength });
+        }
+        let start = 0;
+        for (let index = 1; index <= hits.length; index++) {
+          if (index === hits.length || hits[index].x - hits[index - 1].x > gapLimit) {
+            const run = hits.slice(start, index);
+            if (run.length >= 12) {
+              const span = run[run.length - 1].x - run[0].x;
+              const score = span + Math.min(20, run.reduce((sum, point) => sum + point.strength, 0) / run.length) * 0.2;
+              if (!best || score > best.score) best = { run, score, span };
+            }
+            start = index;
+          }
+        }
+      }
+      if (!best || best.span < (scaled[1].x - scaled[0].x) * 0.58) return null;
+      const meanX = best.run.reduce((sum, point) => sum + point.x, 0) / best.run.length;
+      const meanY = best.run.reduce((sum, point) => sum + point.y, 0) / best.run.length;
+      const slope = best.run.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) /
+        Math.max(1, best.run.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0));
+      const intercept = meanY - slope * meanX;
+      return [
+        { x: best.run[0].x / scale, y: (slope * best.run[0].x + intercept) / scale },
+        { x: best.run[best.run.length - 1].x / scale, y: (slope * best.run[best.run.length - 1].x + intercept) / scale },
+        corners[2], corners[3]
+      ];
+    } catch (_) { return null; }
+  }
+
+  function detectSpreadQuad(cv, source, sourceCanvas, scale) {
+    if (!cv || !source || !source.data || !sourceCanvas || !cv.Mat) return null;
+    const width = source.cols, height = source.rows;
+    const mask = new cv.Mat(height, width, cv.CV_8UC1);
+    const cleaned = new cv.Mat();
+    const hierarchy = new cv.Mat();
+    const contours = new cv.MatVector();
+    const kernelSize = Math.max(3, Math.round(Math.min(width, height) * 0.018) | 1);
+    const kernel = cv.Mat.ones(kernelSize, kernelSize, cv.CV_8U);
+    let best = null;
+    let bestScore = -1;
+    try {
+      if (!fillBorderContrastMask(source, mask)) return null;
+      cv.morphologyEx(mask, cleaned, cv.MORPH_CLOSE, kernel);
+      cv.findContours(cleaned, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      for (let index = 0; index < contours.size(); index++) {
+        const contour = contours.get(index);
+        const hull = new cv.Mat();
+        const polygon = new cv.Mat();
+        try {
+          const contourArea = Math.abs(cv.contourArea(contour));
+          if (contourArea < width * height * 0.16 || contourArea > width * height * 0.92) continue;
+          cv.convexHull(contour, hull, false, true);
+          const hullArea = Math.abs(cv.contourArea(hull));
+          if (!hullArea || contourArea / hullArea < 0.48) continue;
+          const perimeter = cv.arcLength(hull, true);
+          let points = null;
+          for (const epsilon of [0.008, 0.012, 0.018, 0.025, 0.035, 0.05]) {
+            cv.approxPolyDP(hull, polygon, epsilon * perimeter, true);
+            if (polygon.rows === 4 && cv.isContourConvex(polygon)) {
+              points = orderCorners(pointsFromMat(polygon));
+              break;
+            }
+          }
+          if (!points) {
+            const rect = cv.minAreaRect(hull);
+            const angle = rect.angle * Math.PI / 180;
+            const cosine = Math.cos(angle), sine = Math.sin(angle);
+            points = orderCorners([[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => ({
+              x: rect.center.x + x * rect.size.width * cosine / 2 - y * rect.size.height * sine / 2,
+              y: rect.center.y + x * rect.size.width * sine / 2 + y * rect.size.height * cosine / 2
+            })));
+          }
+          const refinedBottom = refineSpreadBottomEdge(sourceCanvas, points.map(point => ({
+            x: point.x / scale, y: point.y / scale
+          })));
+          if (refinedBottom) points = refinedBottom.map(point => ({ x: point.x * scale, y: point.y * scale }));
+          const sides = points.map((point, side) => {
+            const next = points[(side + 1) % 4];
+            return Math.hypot(next.x - point.x, next.y - point.y);
+          });
+          const horizontal = (sides[0] + sides[2]) / 2;
+          const vertical = (sides[1] + sides[3]) / 2;
+          const aspect = Math.max(horizontal, vertical) / Math.max(1, Math.min(horizontal, vertical));
+          const area = polygonArea(points);
+          const areaRatio = area / (width * height);
+          // Some phone photos are framed tightly around the certificate. Keep
+          // real corners close to the image edge, while still rejecting
+          // minAreaRect candidates that spill outside the captured frame.
+          if (points.some(point => point.x < -width * 0.002 || point.y < -height * 0.002 ||
+              point.x > width * 1.002 || point.y > height * 1.002)) continue;
+          if (aspect < 1.12 || aspect > 2.5 || areaRatio < 0.16 || areaRatio > 0.92) continue;
+          const oppositeMismatch = Math.max(
+            Math.max(sides[0], sides[2]) / Math.max(1, Math.min(sides[0], sides[2])),
+            Math.max(sides[1], sides[3]) / Math.max(1, Math.min(sides[1], sides[3]))
+          );
+          if (oppositeMismatch > 2.2) continue;
+          const score = areaRatio * Math.exp(-Math.abs(Math.log(aspect / 1.65))) *
+            Math.min(1, contourArea / Math.max(1, area));
+          if (score <= bestScore) continue;
+          bestScore = score;
+          const corners = points.map(point => ({ x: point.x / scale, y: point.y / scale }));
+          const xs = corners.map(point => point.x), ys = corners.map(point => point.y);
+          const x = Math.max(0, Math.floor(Math.min(...xs))), y = Math.max(0, Math.floor(Math.min(...ys)));
+          const right = Math.min(sourceCanvas.width, Math.ceil(Math.max(...xs)));
+          const bottom = Math.min(sourceCanvas.height, Math.ceil(Math.max(...ys)));
+          best = { x, y, width: right - x, height: bottom - y, corners,
+            detected: true, method: 'opencv', paperShape: true, paperConfidence: 0.86,
+            detectionVariant: 'spread-border-quad' };
+        } finally { contour.delete(); hull.delete(); polygon.delete(); }
+      }
+      return best;
+    } catch (error) {
+      console.info('Bỏ qua dò tứ giác dự phòng cho giấy mở hai mặt.', error);
+      return null;
+    } finally {
+      mask.delete(); cleaned.delete(); hierarchy.delete(); contours.delete(); kernel.delete();
+    }
+  }
+
   function detect(cv, source, blurred, sourceCanvas, scale, options = {}) {
     if (options.documentType && options.documentType.startsWith('cccd')) return null;
     if (!source || !blurred || !cv || !cv.Mat) return null;
@@ -388,8 +690,13 @@
       // find a convincing full document, or when it found only one side of an
       // open two-colour certificate. Fast preview uses it only for that clear
       // one-sided case and remains bounded to the caller's small probe.
-      if (((!options.fast && bestRatio < 0.32) || oneSidedSpread || (options.fast && !best)) &&
-          fillBackgroundContrastMask(source, mask)) {
+      const needsBorderContrast = !best || bestRatio < 0.32 || oneSidedSpread;
+      const contrastMaskReady = needsBorderContrast &&
+        // The border is the least contaminated background sample for a large
+        // open spread. Try it first; hue segmentation remains the fallback for
+        // strongly coloured supports where the border has mixed lighting.
+        (fillBorderContrastMask(source, mask) || fillBackgroundContrastMask(source, mask));
+      if (contrastMaskReady) {
         // Remove thin texture/noise paths before closing small gaps inside the
         // paper. Otherwise a woven support surface can connect the paper mask
         // to unrelated objects at the image border.
@@ -410,6 +717,29 @@
             } finally { contour.delete(); }
           }
         } finally { contours.delete(); }
+      }
+      if (options.preferSpread && (!best || polygonArea(best.corners) / (sourceCanvas.width * sourceCanvas.height) < 0.48)) {
+        const spreadQuad = detectSpreadQuad(cv, source, sourceCanvas, scale);
+        if (spreadQuad && (!best || polygonArea(spreadQuad.corners) > polygonArea(best.corners) * 1.10)) best = spreadQuad;
+      }
+      if (options.preferSpread && best && best.corners && best.paperConfidence < 0.8 &&
+          best.detectionVariant !== 'spread-border-quad') {
+        const refinedTop = refineSpreadTopEdge(sourceCanvas, best.corners);
+        if (refinedTop) {
+          const sides = refinedTop.map((point, index) => Math.hypot(
+            refinedTop[(index + 1) % 4].x - point.x, refinedTop[(index + 1) % 4].y - point.y));
+          const area = polygonArea(refinedTop);
+          if (area > sourceCanvas.width * sourceCanvas.height * 0.14 &&
+              Math.max(sides[0], sides[2]) / Math.max(1, Math.min(sides[0], sides[2])) < 2.2) {
+            best.corners = refinedTop;
+            const xs = refinedTop.map(point => point.x), ys = refinedTop.map(point => point.y);
+            best.x = Math.max(0, Math.floor(Math.min(...xs)));
+            best.y = Math.max(0, Math.floor(Math.min(...ys)));
+            best.width = Math.min(sourceCanvas.width, Math.ceil(Math.max(...xs))) - best.x;
+            best.height = Math.min(sourceCanvas.height, Math.ceil(Math.max(...ys))) - best.y;
+            best.detectionVariant = 'spread-edge-refined';
+          }
+        }
       }
       return best;
     } catch (error) {
@@ -435,5 +765,5 @@
     return union > 0 && intersection / union >= 0.82;
   }
 
-  root.A4DocumentDetector = { detect, matchesBounds, fillBackgroundContrastMask, recoverSpread };
+  root.A4DocumentDetector = { detect, detectSpreadQuad, matchesBounds, fillBackgroundContrastMask, fillBorderContrastMask, recoverSpread };
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -66,6 +66,22 @@ function image(width, height, pixel) {
 }
 
 {
+  const width = 220, height = 160;
+  const sourceImage = image(width, height, (x, y) => {
+    if (x >= 22 && x < 198 && y >= 18 && y < 142) {
+      return x < 110 ? [202, 188, 182] : [188, 80, 86];
+    }
+    return [154 + (x % 5), 158 + (y % 5), 145 + (x % 4)];
+  });
+  const mask = { data: new Uint8Array(width * height) };
+  assert.strictEqual(detector.fillBorderContrastMask(sourceImage, mask), true,
+    'A neutral support surface can still seed a document mask.');
+  assert.strictEqual(mask.data[80 * width + 10], 0, 'The neutral border is removed.');
+  assert.strictEqual(mask.data[80 * width + 70], 255, 'The pale document page is retained.');
+  assert.strictEqual(mask.data[80 * width + 150], 255, 'The coloured document page is retained.');
+}
+
+{
   const width = 320, height = 240;
   const sourceImage = image(width, height, (x, y) => {
     if (x >= 20 && x <= 305 && y >= 60 && y <= 180) return x < 160 ? [235, 230, 211] : [205, 38, 50];
