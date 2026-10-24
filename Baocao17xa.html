@@ -203,7 +203,7 @@
   <header>
     <div>
       <h1>BÁO CÁO TỔNG HỢP TIẾN ĐỘ ĐẤT ĐAI</h1>
-      <div class="subtitle">Dữ liệu thời gian thực từ 17 xã/thị trấn theo nhóm Tình trạng xử lý (Cột A)</div>
+      <div class="subtitle">Danh mục trạng thái lấy từ cột C của bảng nguồn; đối chiếu với cột A của 17 xã</div>
     </div>
     <div class="actions">
       <button class="btn-primary" onclick="loadAllData()">
@@ -229,7 +229,7 @@
       <table id="matrixTable">
         <thead>
           <tr id="tableHeader">
-            <th class="first-col">Tình trạng xử lý (Cột A)</th>
+            <th class="first-col">Tình trạng xử lý</th>
             <!-- Các cột xã sẽ render tự động -->
           </tr>
         </thead>
@@ -296,36 +296,13 @@ const COMMUNES = [
   { name: "Thị Trấn Trà Cú", url: "https://docs.google.com/spreadsheets/d/1JZQG_0b6UZ9AZcW6gtV4DUJ7qRB3NoJpUzlVTGdnyEQ/export?format=csv" }
 ];
 
-// 2. Danh mục chuẩn các tình trạng xử lý từ Trang tính1
-const STANDARD_STATUSES = [
-  "Đã xử lý", "CSD đã chết", "Chưa có GCN", "Không có mã định danh", "Hồ sơ quét bị lỗi",
-  "Tìm Kê khai không thấy", "Không có hồ sơ quét", "GCN chưa ký số", "Chỉ có đơn đăng ký xét cấp",
-  "Hồ sơ chỉ có sổ địa chính", "HSQ không có GCN", "Giấy CN chưa trao", "Chưa cấp GCN",
-  "GCN không xác định chủ", "thiếu thông tin GDBĐ", "Không có CMND", "Tách GCN",
-  "Phương án tặng cho", "Đất tổ chức", "Chưa xác định / Khác"
-];
+const STATUS_SOURCE_URL = "https://docs.google.com/spreadsheets/d/1N9RGGf3ZdYqMcrUe89gUuJbK8Q6l1TpFSLsbidwTuvQ/export?format=csv&gid=0";
 
-// Bộ nhớ đệm dữ liệu: communeIndex -> { rawRows: [], headers: [], statusGroups: { [status]: [rows] } }
+// Dữ liệu theo xã: communeIndex -> { headers: [], rows: [] }
 let dataset = {};
 let currentModalRecords = [];
 let currentModalFilename = "danh_sach.csv";
-
-// Hàm chuẩn hóa chuỗi
-function normalizeText(str) {
-  if (!str) return "";
-  return str.toString().trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-// Tìm tình trạng khớp
-function mapStatus(statusText) {
-  if (!statusText || !statusText.toString().trim()) return "Chưa xác định / Khác";
-  const sNorm = normalizeText(statusText);
-  for (let s of STANDARD_STATUSES) {
-    if (s === "Chưa xác định / Khác") continue;
-    if (normalizeText(s) === sNorm) return s;
-  }
-  return statusText.toString().trim(); // Nếu có tình trạng phát sinh mới ngoài danh mục
-}
+let currentStatusList = [];
 
 // Fetch CSV kèm giải pháp proxy nếu gặp lỗi CORS
 async function fetchCSV(url) {
@@ -351,6 +328,17 @@ async function loadAllData() {
   pBox.style.display = "block";
   dataset = {};
 
+  try {
+    const statusCsv = await fetchCSV(STATUS_SOURCE_URL);
+    const statusRows = Papa.parse(statusCsv, { skipEmptyLines: true }).data || [];
+    currentStatusList = Array.from(new Set(statusRows.slice(1)
+      .map(row => String(row[2] ?? "").trim())
+      .filter(status => status !== "")));
+  } catch (e) {
+    console.error("Lỗi tải danh mục tình trạng xử lý:", e);
+    currentStatusList = [];
+  }
+
   let completed = 0;
   for (let i = 0; i < COMMUNES.length; i++) {
     const com = COMMUNES[i];
@@ -367,27 +355,17 @@ async function loadAllData() {
         const headers = rows[0];
         const dataRows = rows.slice(1);
         
-        // Phân loại theo cột A (index 0)
-        const groups = {};
-        dataRows.forEach(row => {
-          const colAVal = row[0] ? row[0] : "";
-          const matchedStatus = mapStatus(colAVal);
-          if (!groups[matchedStatus]) groups[matchedStatus] = [];
-          groups[matchedStatus].push(row);
-        });
-
         dataset[i] = {
           commune: com.name,
           headers: headers,
-          rows: dataRows,
-          groups: groups
+          rows: dataRows
         };
       } else {
-        dataset[i] = { commune: com.name, headers: [], rows: [], groups: {} };
+        dataset[i] = { commune: com.name, headers: [], rows: [] };
       }
     } catch (e) {
       console.error(`Lỗi tải dữ liệu ${com.name}:`, e);
-      dataset[i] = { commune: com.name, headers: [], rows: [], groups: {}, error: true };
+      dataset[i] = { commune: com.name, headers: [], rows: [], error: true };
     }
 
     completed++;
@@ -406,132 +384,87 @@ function renderMatrixTable() {
   const thead = document.getElementById("tableHeader");
   const tbody = document.getElementById("tableBody");
 
-  // Thu thập toàn bộ các nhóm tình trạng thực tế có trong dữ liệu
-  const allStatusSet = new Set(STANDARD_STATUSES);
-  Object.values(dataset).forEach(data => {
-    if (data.groups) {
-      Object.keys(data.groups).forEach(st => allStatusSet.add(st));
-    }
-  });
-  const statusList = Array.from(allStatusSet);
-
-  // Tạo tiêu đề cột: Cột A (Tình trạng) + 17 Xã + Cột Tổng cộng
-  let headHtml = `<th class="first-col">Tình trạng xử lý (Cột A)</th>`;
-  COMMUNES.forEach((c, idx) => {
-    headHtml += `<th>${c.name}</th>`;
-  });
-  headHtml += `<th class="total-col">Tổng Cộng</th>`;
+  let headHtml = `<th class="first-col">Tình trạng xử lý</th>`;
+  COMMUNES.forEach(c => { headHtml += `<th>${c.name}</th>`; });
+  headHtml += `<th class="total-col">Tổng cộng</th>`;
   thead.innerHTML = headHtml;
 
-  // Tính tổng theo từng xã (cột)
-  const colTotals = new Array(COMMUNES.length).fill(0);
-  let grandTotal = 0;
-
-  let bodyHtml = "";
-  statusList.forEach(status => {
-    let rowTotal = 0;
-    let rowCells = "";
-
-    COMMUNES.forEach((c, idx) => {
-      const comData = dataset[idx];
-      const count = (comData && comData.groups && comData.groups[status]) ? comData.groups[status].length : 0;
-      rowTotal += count;
-      colTotals[idx] += count;
-
-      if (count > 0) {
-        rowCells += `<td><span class="clickable-val" onclick="showDetails(${idx}, '${escapeQuotes(status)}')">${count.toLocaleString()}</span></td>`;
-      } else {
-        rowCells += `<td class="zero-val">0</td>`;
-      }
+  const activeStatuses = currentStatusList.map(status => {
+    const statusKey = status.toLocaleLowerCase().replace(/\s+/g, " ");
+    let grandStatusCount = 0;
+    const counts = COMMUNES.map((commune, communeIdx) => {
+      const rows = dataset[communeIdx]?.rows || [];
+      const count = rows.filter(row => String(row[0] ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ") === statusKey).length;
+      grandStatusCount += count;
+      return count;
     });
+    return { status, counts, grandStatusCount };
+  }).filter(item => item.grandStatusCount > 0);
+  currentStatusList = activeStatuses.map(item => item.status);
 
-    grandTotal += rowTotal;
+  let bodyHtml = activeStatuses.map((item, statusIdx) => {
+    const cells = item.counts.map((count, communeIdx) =>
+      `<td>${count ? `<span class="clickable-val" onclick="showStatusDetails(${communeIdx}, ${statusIdx})">${count.toLocaleString()}</span>` : `<span class="zero-val">0</span>`}</td>`
+    ).join("");
+    return `<tr><td class="first-col">${item.status}</td>${cells}<td class="total-col">${item.grandStatusCount.toLocaleString()}</td></tr>`;
+  }).join("");
 
-    // Chỉ hiển thị các dòng có dữ liệu hoặc thuộc nhóm chuẩn
-    bodyHtml += `
-      <tr>
-        <td class="first-col">${status}</td>
-        ${rowCells}
-        <td class="total-col">
-          ${rowTotal > 0 ? `<span class="clickable-val" onclick="showStatusTotalDetails('${escapeQuotes(status)}')">${rowTotal.toLocaleString()}</span>` : '0'}
-        </td>
-      </tr>
-    `;
-  });
+  let grandCompleted = 0;
+  let grandTotal = 0;
+  const cells = COMMUNES.map((commune, idx) => {
+    const comData = dataset[idx];
+    const rows = comData ? comData.rows : [];
+    const total = rows.length;
+    const completed = rows.filter(row => String(row[0] ?? "").trim() !== "").length;
+    grandCompleted += completed;
+    grandTotal += total;
+    const value = `${completed.toLocaleString()} / ${total.toLocaleString()}`;
+    return `<td>${completed > 0 ? `<span class="clickable-val" onclick="showCompletedDetails(${idx})">${value}</span>` : value}</td>`;
+  }).join("");
 
-  // Hàng tổng cộng (Chân bảng)
-  let footerHtml = `
+  bodyHtml += `
     <tr class="total-row">
-      <td class="first-col">TỔNG TOÀN XÃ</td>
-      ${colTotals.map((tot, idx) => `<td><span class="clickable-val" onclick="showCommuneTotalDetails(${idx})">${tot.toLocaleString()}</span></td>`).join("")}
-      <td class="total-col">${grandTotal.toLocaleString()}</td>
+      <td class="first-col">Cột A có tình trạng / tổng số dòng</td>
+      ${cells}
+      <td class="total-col">${grandCompleted.toLocaleString()} / ${grandTotal.toLocaleString()}</td>
     </tr>
   `;
+  tbody.innerHTML = bodyHtml;
+}
 
-  tbody.innerHTML = bodyHtml + footerHtml;
+function showStatusDetails(communeIdx, statusIdx) {
+  const comData = dataset[communeIdx];
+  const status = currentStatusList[statusIdx];
+  if (!comData || !status) return;
+  const statusKey = status.toLocaleLowerCase().replace(/\s+/g, " ");
+  const rows = comData.rows.filter(row => String(row[0] ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ") === statusKey);
+
+  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name} - ${status}`;
+  document.getElementById("modalSubtitle").innerText = `Tình trạng xử lý: ${rows.length} hồ sơ`;
+  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${rows.length} dòng dữ liệu`;
+  currentModalRecords = [comData.headers, ...rows];
+  currentModalFilename = `${COMMUNES[communeIdx].name}_${status}.csv`.replace(/[\/\\?%*:|"<>]/g, "_");
+  renderDetailTable(comData.headers, rows);
+  document.getElementById("detailModal").style.display = "flex";
+}
+
+function showCompletedDetails(communeIdx) {
+  const comData = dataset[communeIdx];
+  if (!comData) return;
+  const rows = comData.rows.filter(row => String(row[0] ?? "").trim() !== "");
+  const total = comData.rows.length;
+
+  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name} - Đã thực hiện`;
+  document.getElementById("modalSubtitle").innerText = `Cột A có tình trạng: ${rows.length} / ${total}`;
+  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${rows.length} dòng dữ liệu`;
+  currentModalRecords = [comData.headers, ...rows];
+  currentModalFilename = `${COMMUNES[communeIdx].name}_DaThucHien.csv`.replace(/[\/\\?%*:|"<>]/g, "_");
+  renderDetailTable(comData.headers, rows);
+  document.getElementById("detailModal").style.display = "flex";
 }
 
 function escapeQuotes(str) {
   return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-}
-
-// 3. Hiển thị Popup và danh sách chi tiết
-function showDetails(communeIdx, status) {
-  const comData = dataset[communeIdx];
-  if (!comData || !comData.groups[status]) return;
-
-  const rows = comData.groups[status];
-  const headers = comData.headers;
-
-  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name}`;
-  document.getElementById("modalSubtitle").innerText = `Tình trạng: "${status}" - Tổng cộng: ${rows.length} hồ sơ`;
-  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${rows.length} dòng dữ liệu`;
-
-  currentModalRecords = [headers, ...rows];
-  currentModalFilename = `${COMMUNES[communeIdx].name}_${status}.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
-
-  renderDetailTable(headers, rows);
-  document.getElementById("detailModal").style.display = "flex";
-}
-
-// Xem tổng của 1 trạng thái trên cả 17 xã
-function showStatusTotalDetails(status) {
-  let combinedRows = [];
-  let commonHeaders = [];
-
-  COMMUNES.forEach((c, idx) => {
-    const comData = dataset[idx];
-    if (comData && comData.groups[status]) {
-      if (commonHeaders.length === 0) commonHeaders = ["Tên Xã", ...comData.headers];
-      comData.groups[status].forEach(r => combinedRows.push([c.name, ...r]));
-    }
-  });
-
-  document.getElementById("modalTitle").innerText = `Tất cả 17 xã - Tình trạng: ${status}`;
-  document.getElementById("modalSubtitle").innerText = `Tổng số lượng: ${combinedRows.length} hồ sơ`;
-  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${combinedRows.length} dòng dữ liệu`;
-
-  currentModalRecords = [commonHeaders, ...combinedRows];
-  currentModalFilename = `TongHop17Xa_${status}.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
-
-  renderDetailTable(commonHeaders, combinedRows);
-  document.getElementById("detailModal").style.display = "flex";
-}
-
-// Xem toàn bộ của 1 xã
-function showCommuneTotalDetails(communeIdx) {
-  const comData = dataset[communeIdx];
-  if (!comData) return;
-
-  document.getElementById("modalTitle").innerText = `${COMMUNES[communeIdx].name} - Toàn bộ hồ sơ`;
-  document.getElementById("modalSubtitle").innerText = `Tổng số lượng: ${comData.rows.length} hồ sơ`;
-  document.getElementById("modalRecordCount").innerText = `Hiển thị: ${comData.rows.length} dòng dữ liệu`;
-
-  currentModalRecords = [comData.headers, ...comData.rows];
-  currentModalFilename = `${COMMUNES[communeIdx].name}_TatCa.csv`.replace(/[\/\\?%*:|"<>]/g, '_');
-
-  renderDetailTable(comData.headers, comData.rows);
-  document.getElementById("detailModal").style.display = "flex";
 }
 
 function renderDetailTable(headers, rows) {
