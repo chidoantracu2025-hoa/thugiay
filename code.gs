@@ -5,6 +5,8 @@ const SAVE_REQUEST_PREFIX = 'SCAN_SAVE_V1_';
 const SAVE_REQUEST_INDEX = 'SCAN_SAVE_INDEX_V1';
 const SAVE_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const SAVE_REQUEST_LEASE_MS = 7 * 60 * 1000;
+const DAILY_REPORT_SPREADSHEET_ID = '1UzdjhtSRRD9yO0h-UJxQzkVjoeoEB-WqMzeLO6x6HKs';
+const DAILY_REPORT_SHEET_NAME = 'Trang tính1';
 
 const HEADER_ROW = [
   'STT', 'Tên huyện', 'Tên xã cũ', 'Tên xã mới', 'Họ Tên CSD',
@@ -47,6 +49,10 @@ function doPost(e) {
         return jsonResponse(listRecords(payload));
       case 'REPORT':
         return jsonResponse(reportRecords(payload));
+      case 'SAVE_DAILY_REPORT':
+        return jsonResponse(saveDailyReport(payload));
+      case 'GET_DAILY_REPORTS':
+        return jsonResponse(getDailyReports(payload));
       case 'UPDATE_PROCESSING_STATUS':
         return jsonResponse(updateProcessingStatus(payload));
       default:
@@ -59,6 +65,60 @@ function doPost(e) {
 
 function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function dailyReportSheet_() {
+  const ss = SpreadsheetApp.openById(DAILY_REPORT_SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(DAILY_REPORT_SHEET_NAME) || ss.insertSheet(DAILY_REPORT_SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Ngày', 'STT', 'Cán bộ thực hiện', 'Địa bàn', 'SL thực hiện', 'Ghi chú', 'Cập nhật lúc']);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function dailyReportDate_(value) {
+  const date = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function saveDailyReport(payload) {
+  const date = dailyReportDate_(payload.date);
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const sheet = dailyReportSheet_();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const values = sheet.getDataRange().getValues();
+    for (let row = values.length - 1; row >= 1; row--) {
+      const cellDate = values[row][0] instanceof Date
+        ? Utilities.formatDate(values[row][0], Session.getScriptTimeZone(), 'yyyy-MM-dd')
+        : String(values[row][0]).slice(0, 10);
+      if (cellDate === date) sheet.deleteRow(row + 1);
+    }
+    const now = new Date();
+    const output = rows.map((item, index) => [
+      date, index + 1, String(item.person || ''), String(item.area || ''), Number(item.count || 0), String(item.note || ''), now
+    ]);
+    if (output.length) sheet.getRange(sheet.getLastRow() + 1, 1, output.length, output[0].length).setValues(output);
+    return { success: true, date: date, savedRows: output.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getDailyReports(payload) {
+  const sheet = dailyReportSheet_();
+  const values = sheet.getDataRange().getValues();
+  const from = dailyReportDate_(payload.from);
+  const to = dailyReportDate_(payload.to || from);
+  const rows = values.slice(1).map(row => {
+    const date = row[0] instanceof Date
+      ? Utilities.formatDate(row[0], Session.getScriptTimeZone(), 'yyyy-MM-dd')
+      : String(row[0]).slice(0, 10);
+    return { date: date, stt: row[1], person: row[2], area: row[3], count: Number(row[4] || 0), note: row[5] };
+  }).filter(row => row.date >= from && row.date <= to);
+  return { success: true, rows: rows };
 }
 
 function pdfUploadCapabilities() {

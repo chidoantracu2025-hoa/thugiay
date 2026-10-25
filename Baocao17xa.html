@@ -195,6 +195,33 @@
     }
     .close-btn { background: none; border: none; font-size: 1.5rem; color: #64748b; cursor: pointer; }
     .close-btn:hover { color: #0f172a; }
+
+    /* Tabs and daily assignment report */
+    .tab-nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .tab-button { background: #e2e8f0; color: #334155; }
+    .tab-button.active { background: var(--primary); color: #fff; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .report-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 16px; }
+    .report-toolbar label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: .8rem; font-weight: 600; }
+    .report-toolbar input { padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+    .report-note { margin: 0 0 14px; color: var(--text-muted); font-size: .85rem; }
+    .report-table th, .report-table td { text-align: left; }
+    .report-table td.area-merged { white-space: normal; text-align: center; vertical-align: middle; line-height: 1.45; }
+    .report-table td.area-merged .area-line { display: block; }
+    .report-table th.col-number, .report-table td.col-number,
+    .report-table th.col-count, .report-table td.col-count,
+    .report-table td.total-count { text-align: center; vertical-align: middle; }
+    .report-table th.col-number, .report-table td.col-number { min-width: 55px; }
+    .report-table th.col-count, .report-table td.col-count, .report-table td.total-count { min-width: 115px; }
+    .report-table td.col-count, .report-table td.total-count { font-weight: 700; color: var(--primary); }
+    .report-table th.col-note, .report-table td.col-note { text-align: left; vertical-align: middle; white-space: normal; min-width: 190px; }
+    .report-table .total-row td { text-align: right; }
+    .report-table .total-row td.total-label { text-align: left; }
+    .report-table .total-row td.total-count { text-align: center; }
+    .report-table .total-row td:first-child { text-align: left; }
+    .history-card { margin-top: 16px; }
+    .history-table th, .history-table td { text-align: center; }
   </style>
 </head>
 <body>
@@ -214,6 +241,12 @@
     </div>
   </header>
 
+  <nav class="tab-nav" aria-label="Các báo cáo">
+    <button class="tab-button active" data-tab="summaryTab" onclick="switchReportTab('summaryTab')">Báo cáo tổng hợp 17 xã</button>
+    <button class="tab-button" data-tab="assignmentTab" onclick="switchReportTab('assignmentTab')">Báo cáo kế hoạch 2959</button>
+  </nav>
+
+  <section class="tab-panel active" id="summaryTab">
   <div class="progress-box" id="progressBox" style="display: none;">
     <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600;">
       <span id="progressText">Đang kết nối dữ liệu...</span>
@@ -243,6 +276,31 @@
       </table>
     </div>
   </div>
+
+  </section>
+
+  <section class="tab-panel" id="assignmentTab">
+    <div class="table-card" style="padding: 18px;">
+      <div class="report-toolbar">
+        <label>Từ ngày<input type="date" id="reportFromDate" onchange="renderAssignmentReport()"></label>
+        <label>Đến ngày<input type="date" id="reportToDate" onchange="renderAssignmentReport()"></label>
+        <label style="min-width:320px">Web App URL Google Apps Script<input type="url" id="dailyReportApiUrl" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveDailyReportApiUrl()"></label>
+        <button class="btn-primary" onclick="saveTodayAssignmentReport()">Lưu số liệu hôm nay</button>
+        <button class="btn-secondary" onclick="exportAssignmentReportCSV()">Xuất CSV báo cáo</button>
+      </div>
+      <p class="report-note" id="assignmentReportNote">Số lượng được tính tự động từ số dòng có trạng thái ở Cột A. Chỉ khi bấm “Lưu số liệu hôm nay”, số liệu mới được ghi vào Google Sheet.</p>
+      <div class="table-scroll">
+        <table class="report-table" id="assignmentTable">
+          <thead><tr><th>STT</th><th>Cán bộ thực hiện</th><th>Địa bàn</th><th>SL thực hiện</th><th>Ghi chú</th></tr></thead>
+          <tbody id="assignmentBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="table-card history-card">
+      <div style="padding: 16px 18px; font-weight: 700; color: var(--primary);">Lịch sử tổng hợp theo ngày</div>
+      <div class="table-scroll"><table class="history-table" id="assignmentHistoryTable"><thead><tr><th>Ngày</th><th>Tổng số</th><th>Số dòng</th><th>Thao tác</th></tr></thead><tbody id="assignmentHistoryBody"></tbody></table></div>
+    </div>
+  </section>
 </div>
 
 <!-- Modal hiển thị & tải danh sách chi tiết -->
@@ -379,6 +437,8 @@ async function loadAllData() {
   setTimeout(() => { pBox.style.display = "none"; }, 800);
 
   renderMatrixTable();
+  renderAssignmentReport();
+  renderAssignmentHistory();
 }
 
 // Kết xuất bảng ma trận tổng hợp
@@ -525,7 +585,172 @@ function exportMatrixToCSV() {
 }
 
 // Tự động kích hoạt tải dữ liệu ngay khi mở trang
+// Daily assignment report based on the current 17-commune dataset.
+const ASSIGNMENT_STORAGE_KEY = "baocao17xa_kehoach2959_daily";
+const DAILY_REPORT_API_URL_KEY = "baocao17xa_daily_report_api_url";
+const DAILY_REPORT_API_URL = "https://script.google.com/macros/s/AKfycbw_e2jMwbZszTRNOFSikTbpYFlXWp4pjjveDpoDlvkQglsH30XW9bElqBE8UEw17E01/exec";
+const ASSIGNMENTS = [
+  { person: "Thạch Thị Binh Tranh", area: "Hàm Tân", groupArea: "Hàm Tân / Long Hiệp", hints: ["Hàm Giang Cũ"] },
+  { person: "Thạch Thị Kim Trang", area: "Long Hiệp", groupArea: "Hàm Tân / Long Hiệp", hints: ["Long Hiệp"] },
+  { person: "Kim Thị Thanh Hường", area: "Hàm Giang", groupArea: "Hàm Giang / Tân Hiệp", hints: ["Hàm Giang Mới"] },
+  { person: "Tăng Thị Mỹ Tiên", area: "Tân Hiệp", groupArea: "Hàm Giang / Tân Hiệp", hints: ["Tân Hiệp"] },
+  { person: "Hứa Thị Hồng Khánh", area: "Kim Sơn", groupArea: "Kim Sơn / Ngọc Biên", hints: ["Kim Sơn"] },
+  { person: "Lâm Văn Cần", area: "Ngọc Biên", groupArea: "Kim Sơn / Ngọc Biên", hints: ["Ngọc Biên"] },
+  { person: "Lý Thị Huyến", area: "Đại An", groupArea: "Đại An / Phước Hưng", hints: ["Đại An"] },
+  { person: "Kim Thị Thùy Trang", area: "Phước Hưng", groupArea: "Đại An / Phước Hưng", hints: ["Phước Hưng"] },
+  { person: "Võ Ngọc Lệ Thu", area: "Định An", groupArea: "Định An / Tập Sơn", hints: ["Định An"] },
+  { person: "Sơn Minh Trạng", area: "Tập Sơn", groupArea: "Định An / Tập Sơn", hints: ["Tập Sơn"] },
+  { person: "Đoàn Văn Nam", area: "TT Định An", groupArea: "TT Định An / Tân Sơn", hints: ["Thị Trấn Định An"] },
+  { person: "Lâm Thị Thảo Quyên", area: "Tân Sơn", groupArea: "TT Định An / Tân Sơn", hints: ["Tân Sơn"] },
+  { person: "Bùi Tấn Đạt", area: "Lưu Nghiệp Anh", groupArea: "Lưu Nghiệp Anh / An Quảng Hữu", hints: ["Lưu Nghiệp Anh"] },
+  { person: "Kim Thanh Nhân", area: "An Quảng Hữu", groupArea: "Lưu Nghiệp Anh / An Quảng Hữu", hints: ["An Quảng Hữu"] },
+  { person: "Nhóm Thu GCN hỗ trợ", area: "Ngãi Xuyên / Thanh Sơn / TT Trà Cú", groupArea: "Ngãi Xuyên / Thanh Sơn / TT Trà Cú", hints: ["Ngãi Xuyên", "Thanh Sơn", "Thị Trấn Trà Cú"] }
+];
+
+function localDateISO(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+function readAssignmentHistory() {
+  try { return JSON.parse(localStorage.getItem(ASSIGNMENT_STORAGE_KEY) || "{}"); }
+  catch (e) { return {}; }
+}
+function completedForCommune(communeIdx) {
+  return (dataset[communeIdx]?.rows || []).filter(row => String(row[0] ?? "").trim() !== "").length;
+}
+function currentAssignmentRows() {
+  return ASSIGNMENTS.map(item => ({
+    person: item.person, area: item.area,
+    count: item.hints.reduce((sum, hint) => {
+      const idx = COMMUNES.findIndex(c => c.name.includes(hint));
+      return sum + (idx >= 0 ? completedForCommune(idx) : 0);
+    }, 0), note: "Tự động từ dữ liệu 17 xã"
+  }));
+}
+function getDailyReportApiUrl() {
+  return (document.getElementById("dailyReportApiUrl")?.value || localStorage.getItem(DAILY_REPORT_API_URL_KEY) || DAILY_REPORT_API_URL).trim();
+}
+function saveDailyReportApiUrl() {
+  const url = document.getElementById("dailyReportApiUrl").value.trim();
+  localStorage.setItem(DAILY_REPORT_API_URL_KEY, url);
+  if (url) loadDailyReportsFromSheet();
+}
+async function dailyReportApi(action, payload) {
+  const url = getDailyReportApiUrl();
+  if (!url) return null;
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: JSON.stringify({ action, payload }) });
+  const data = await response.json();
+  if (!response.ok || !data.success) throw new Error(data.error || "Google Sheet API lỗi");
+  return data;
+}
+async function pushDailyReportToSheet(date, rows) {
+  try {
+    const result = await dailyReportApi("SAVE_DAILY_REPORT", { date, rows });
+    if (result) document.getElementById("assignmentReportNote").innerText = `Đã lưu ngày ${date} vào Google Sheet.`;
+  } catch (error) {
+    console.error("Không thể lưu báo cáo ngày vào Google Sheet", error);
+    document.getElementById("assignmentReportNote").innerText = `Đã lưu tạm trên máy; Google Sheet chưa nhận dữ liệu: ${error.message}`;
+  }
+}
+async function loadDailyReportsFromSheet() {
+  try {
+    const data = await dailyReportApi("GET_DAILY_REPORTS", { from: "2000-01-01", to: "2999-12-31" });
+    if (!data || !Array.isArray(data.rows)) return;
+    const history = readAssignmentHistory();
+    data.rows.forEach(row => {
+      if (!history[row.date]) history[row.date] = { date: row.date, rows: [] };
+      const index = Number(row.stt) - 1;
+      history[row.date].rows[index] = { person: row.person, area: row.area, count: row.count, note: row.note };
+    });
+    localStorage.setItem(ASSIGNMENT_STORAGE_KEY, JSON.stringify(history));
+    renderAssignmentReport();
+    renderAssignmentHistory();
+  } catch (error) {
+    console.warn("Không thể đọc lịch sử từ Google Sheet", error);
+  }
+}
+function saveTodayAssignmentReport(silent = false) {
+  const history = readAssignmentHistory();
+  const date = localDateISO();
+  const rows = currentAssignmentRows();
+  history[date] = { date, rows, savedAt: new Date().toISOString() };
+  localStorage.setItem(ASSIGNMENT_STORAGE_KEY, JSON.stringify(history));
+  pushDailyReportToSheet(date, rows);
+  if (!silent) {
+    document.getElementById("assignmentReportNote").innerText = `Đã lưu số liệu ngày ${date}. Số lượng được tính tự động từ Cột A.`;
+    renderAssignmentHistory();
+  }
+}
+function dateRangeValues() {
+  const today = localDateISO();
+  const from = document.getElementById("reportFromDate").value || today;
+  const to = document.getElementById("reportToDate").value || from;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+function rowsForDateRange() {
+  const { from, to } = dateRangeValues();
+  const history = readAssignmentHistory();
+  const dates = Object.keys(history).filter(date => date >= from && date <= to).sort();
+  if (dates.length === 0) return { rows: currentAssignmentRows(), label: `${from} đến ${to} (dữ liệu hiện tại)` };
+  return { rows: ASSIGNMENTS.map((item, idx) => ({
+    person: item.person, area: item.area,
+    count: dates.reduce((sum, date) => sum + Number(history[date].rows[idx]?.count || 0), 0),
+    note: dates.length === 1 ? "Đã lưu theo ngày" : `Cộng ${dates.length} ngày`
+  })), label: dates.length === 1 ? dates[0] : `${dates[0]} đến ${dates[dates.length - 1]}` };
+}
+function renderAssignmentReport() {
+  const body = document.getElementById("assignmentBody");
+  if (!body) return;
+  const result = rowsForDateRange();
+  const total = result.rows.reduce((sum, row) => sum + row.count, 0);
+  body.innerHTML = result.rows.map((row, idx) => {
+    const assignment = ASSIGNMENTS[idx];
+    const isGroupedAreaStart = assignment.groupArea && (idx === 0 || assignment.groupArea !== ASSIGNMENTS[idx - 1].groupArea);
+    const isGroupedAreaContinuation = assignment.groupArea && idx > 0 && assignment.groupArea === ASSIGNMENTS[idx - 1].groupArea;
+    let groupSize = 1;
+    while (isGroupedAreaStart && idx + groupSize < ASSIGNMENTS.length && ASSIGNMENTS[idx + groupSize].groupArea === assignment.groupArea) groupSize++;
+    const areaCell = isGroupedAreaContinuation ? "" : `<td class="area-merged"${isGroupedAreaStart ? ` rowspan="${groupSize}"` : ""}>${renderAssignmentArea(assignment.groupArea || row.area)}</td>`;
+    return `<tr><td class="col-number">${idx + 1}</td><td class="col-person">${row.person}</td>${areaCell}<td class="col-count">${row.count.toLocaleString()}</td><td class="col-note">${row.note}</td></tr>`;
+  }).join("") +
+    `<tr class="total-row"><td class="total-label" colspan="3">TỔNG CỘNG (${result.label})</td><td class="total-count">${total.toLocaleString()}</td><td class="col-note"></td></tr>`;
+}
+function renderAssignmentArea(area) {
+  return String(area).split(" / ").map(item => `<span class="area-line">${item}</span>`).join("");
+}
+function renderAssignmentHistory() {
+  const body = document.getElementById("assignmentHistoryBody");
+  if (!body) return;
+  const history = readAssignmentHistory();
+  const dates = Object.keys(history).sort().reverse();
+  body.innerHTML = dates.length ? dates.map(date => {
+    const total = (history[date].rows || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
+    return `<tr><td>${date}</td><td>${total.toLocaleString()}</td><td>${history[date].rows?.length || 0}</td><td><button class="btn-secondary" onclick="selectAssignmentDate('${date}')">Xem ngày</button></td></tr>`;
+  }).join("") : `<tr><td colspan="4" style="text-align:center;padding:18px;color:var(--text-muted)">Chưa có dữ liệu lịch sử.</td></tr>`;
+}
+function selectAssignmentDate(date) {
+  document.getElementById("reportFromDate").value = date;
+  document.getElementById("reportToDate").value = date;
+  renderAssignmentReport();
+}
+function exportAssignmentReportCSV() {
+  const result = rowsForDateRange();
+  const rows = [["STT", "Cán bộ thực hiện", "Địa bàn", "SL thực hiện", "Ghi chú"], ...result.rows.map((row, idx) => [idx + 1, row.person, row.area, row.count, row.note])];
+  downloadCSV(Papa.unparse(rows), `BaoCaoKeHoach2959_${result.label.replace(/\s+/g, "_")}.csv`);
+}
+function switchReportTab(tabId) {
+  document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === tabId));
+  document.querySelectorAll(".tab-button").forEach(button => button.classList.toggle("active", button.dataset.tab === tabId));
+  if (tabId === "assignmentTab") { renderAssignmentReport(); renderAssignmentHistory(); }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
+  const today = localDateISO();
+  document.getElementById("dailyReportApiUrl").value = localStorage.getItem(DAILY_REPORT_API_URL_KEY) || DAILY_REPORT_API_URL;
+  document.getElementById("reportFromDate").value = today;
+  document.getElementById("reportToDate").value = today;
+  renderAssignmentReport();
+  renderAssignmentHistory();
+  loadDailyReportsFromSheet();
   loadAllData();
 });
 </script>
