@@ -620,7 +620,10 @@
           });
           const horizontal = (sides[0] + sides[2]) / 2;
           const vertical = (sides[1] + sides[3]) / 2;
-          const aspect = Math.max(horizontal, vertical) / Math.max(1, Math.min(horizontal, vertical));
+          // This detector is exclusively for an open two-page certificate.
+          // Keep the direction: using long-side/short-side here also accepts a
+          // portrait quad around the whole phone frame (test/test1 background).
+          const aspect = horizontal / Math.max(1, vertical);
           const area = polygonArea(points);
           const areaRatio = area / (width * height);
           // Some phone photos are framed tightly around the certificate. Keep
@@ -655,6 +658,73 @@
     } finally {
       mask.delete(); cleaned.delete(); hierarchy.delete(); contours.delete(); kernel.delete();
     }
+  }
+
+  // Last-resort candidate for a pale open certificate that spans almost the
+  // full camera width. Furniture and clothing can join the colour mask to the
+  // frame; the two long paper/background transitions remain measurable.
+  function detectWideSpreadByBands(source, sourceCanvas, scale) {
+    if (!source || !source.data || !sourceCanvas || !scale) return null;
+    const width = source.cols, height = source.rows, pixels = source.data;
+    const left = Math.floor(width * 0.005), right = Math.ceil(width * 0.995);
+    // Sample beyond decorative borders and laminated shadows; a very narrow
+    // comparison sees the dark red frame itself instead of the pale page.
+    const gap = Math.max(3, Math.round(height * 0.025));
+    function luminance(x, y) {
+      const offset = (y * width + x) * 4;
+      return pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
+    }
+    function transition(y, enteringPaper) {
+      let difference = 0, inside = 0, count = 0, supportive = 0;
+      for (let x = left; x <= right; x += 3) {
+        const above = luminance(x, y - gap), below = luminance(x, y + gap);
+        const signed = enteringPaper ? below - above : above - below;
+        difference += signed; inside += enteringPaper ? below : above; count++;
+        if (signed >= 16) supportive++;
+      }
+      return { score: difference / Math.max(1, count), inside: inside / Math.max(1, count),
+        support: supportive / Math.max(1, count) };
+    }
+    let best = null;
+    const topStart = Math.max(gap, Math.floor(height * 0.22));
+    const topEnd = Math.min(height - gap - 1, Math.ceil(height * 0.43));
+    const bottomStart = Math.max(gap, Math.floor(height * 0.70));
+    const bottomEnd = Math.min(height - gap - 1, Math.ceil(height * 0.90));
+    for (let top = topStart; top <= topEnd; top++) {
+      const first = transition(top, true);
+      if (first.score < 12 || first.inside < 130 || first.support < 0.34) continue;
+      for (let bottom = Math.max(bottomStart, top + Math.floor(height * 0.32));
+          bottom <= Math.min(bottomEnd, top + Math.ceil(height * 0.62)); bottom++) {
+        const second = transition(bottom, false);
+        if (second.score < 10 || second.inside < 130 || second.support < 0.30) continue;
+        const aspect = (right - left) / Math.max(1, bottom - top);
+        if (aspect < 1.25 || aspect > 2.35) continue;
+        // Prefer the outer upper edge around the upper third of a portrait
+        // phone frame. Dense headings/emblems inside the certificate can make
+        // a later row produce a stronger raw transition than the paper edge.
+        const score = first.score + second.score + 20 * (first.support + second.support) -
+          Math.abs(top - height * 0.31) * 0.55;
+        if (!best || score > best.score) best = { top, bottom, score };
+      }
+    }
+    if (!best) return null;
+    const x1 = left / scale, x2 = right / scale;
+    const y1 = best.top / scale, y2 = best.bottom / scale;
+    let corners = [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }];
+    const refinedBottom = refineSpreadBottomEdge(sourceCanvas, corners);
+    if (refinedBottom) {
+      const first = refinedBottom[3], second = refinedBottom[2];
+      const slope = (second.y - first.y) / Math.max(1, second.x - first.x);
+      const intercept = first.y - slope * first.x;
+      corners[2] = { x: x2, y: slope * x2 + intercept };
+      corners[3] = { x: x1, y: slope * x1 + intercept };
+    }
+    const xs = corners.map(point => point.x), ys = corners.map(point => point.y);
+    const x = Math.max(0, Math.floor(Math.min(...xs))), y = Math.max(0, Math.floor(Math.min(...ys)));
+    return { x, y, width: Math.min(sourceCanvas.width, Math.ceil(Math.max(...xs))) - x,
+      height: Math.min(sourceCanvas.height, Math.ceil(Math.max(...ys))) - y,
+      corners, detected: true, method: 'opencv', paperShape: true, paperConfidence: 0.79,
+      detectionVariant: 'spread-horizontal-bands' };
   }
 
   function detect(cv, source, blurred, sourceCanvas, scale, options = {}) {
@@ -767,6 +837,7 @@
         const spreadQuad = detectSpreadQuad(cv, source, sourceCanvas, scale);
         if (spreadQuad && (!best || polygonArea(spreadQuad.corners) > polygonArea(best.corners) * 1.10)) best = spreadQuad;
       }
+      if (options.preferSpread && !best) best = detectWideSpreadByBands(source, sourceCanvas, scale);
       if (options.preferSpread && best && best.corners) {
         const bestArea = polygonArea(best.corners);
         const bestCenterX = best.x + best.width / 2;
@@ -790,7 +861,8 @@
         }
       }
       if (options.preferSpread && best && best.corners && best.paperConfidence < 0.8 &&
-          best.detectionVariant !== 'spread-border-quad') {
+          best.detectionVariant !== 'spread-border-quad' &&
+          best.detectionVariant !== 'spread-horizontal-bands') {
         const refinedTop = refineSpreadTopEdge(sourceCanvas, best.corners);
         if (refinedTop) {
           const sides = refinedTop.map((point, index) => Math.hypot(
