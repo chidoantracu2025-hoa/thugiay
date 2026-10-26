@@ -448,17 +448,25 @@
           displayFixture('Optional local sample', canvas);
           const candidate = scan.detectDocumentBounds(canvas, 'opencv', options);
           assert(candidate && candidate.detected && candidate.corners, 'Sample did not produce perspective corners');
-          // The supplied test.jpg paper occupies these approximate normalized bounds.
+          // The supplied phone photos show an open two-page certificate. Keep
+          // the regression target around the complete spread, not the older
+          // single-page crop used by an earlier sample image.
           if (sample === 'test.jpg') {
-            const expected = { x: canvas.width * .159, y: canvas.height * .266, width: canvas.width * .772, height: canvas.height * .376 };
+            const expected = { x: canvas.width * .005, y: canvas.height * .27, width: canvas.width * .99, height: canvas.height * .53 };
             verifyBounds(candidate, expected, .9);
           } else if (sample === 'test1.jpg') {
-            const expected = { x: canvas.width * .011, y: canvas.height * .258, width: canvas.width * .868, height: canvas.height * .44 };
+            const expected = { x: canvas.width * .03, y: canvas.height * .25, width: canvas.width * .96, height: canvas.height * .53 };
             verifyBounds(candidate, expected, .9);
           } else if (sample === 'test4.jpg') {
             const expected = { x: canvas.width * .05, y: canvas.height * .065, width: canvas.width * .91, height: canvas.height * .865 };
             verifyBounds(candidate, expected, .9);
             verifyBounds(scan.detectDocumentWithOpenCv(canvas, false, { ...options, fast: true, maxDimension: 480 }), expected, .9);
+          }
+          if (sample === 'test.jpg' || sample === 'test1.jpg') {
+            const rectified = scan.prepareScan(canvas, options).canvas;
+            const spreadAspect = rectified.width / rectified.height;
+            assert(spreadAspect >= 1.25 && spreadAspect <= 1.55,
+              `Open spread was not deskewed to landscape; output ratio ${spreadAspect.toFixed(3)}`);
           }
           await compareWorker(canvas, options);
           return `detected via ${candidate.method}; worker agrees`;
