@@ -236,9 +236,22 @@
           </button>
         </div>
 
+        <!-- Chế độ tái tạo tài liệu -->
+        <div class="px-3 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center gap-2">
+          <span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">Chế độ:</span>
+          <button type="button" data-conversion-mode="flow" class="conversion-mode-btn px-3 py-1.5 rounded-lg border text-xs font-semibold transition flex items-center gap-1.5" title="Gom dòng thành đoạn văn liền mạch, dễ đọc và chỉnh sửa">
+            <i class="fa-solid fa-align-left"></i><span>Giữ nguyên khối văn bản</span>
+            <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[9px] uppercase">Khuyên dùng</span>
+          </button>
+          <button type="button" data-conversion-mode="layout" class="conversion-mode-btn px-3 py-1.5 rounded-lg border text-xs font-semibold transition flex items-center gap-1.5" title="Giữ vị trí dòng, khoảng cách và ngắt trang gần với bản gốc">
+            <i class="fa-regular fa-file-lines"></i><span>Giữ khung trang</span>
+          </button>
+          <span id="conversionModeHint" class="text-[11px] text-slate-400 ml-auto">Văn bản liền mạch, hạn chế xáo trộn định dạng.</span>
+        </div>
+
         <!-- Khung Trang A4 (WYSIWYG) -->
         <div class="flex-1 overflow-y-auto p-4 bg-slate-100 flex justify-center">
-          <div id="wordSheet" contenteditable="true" class="a4-page bg-white p-12 text-slate-900 font-times leading-relaxed text-[14pt] text-justify focus:outline-none">
+          <div id="wordSheet" contenteditable="true" class="a4-page bg-white p-12 text-slate-900 font-times leading-[1.3] text-[13pt] text-justify focus:outline-none">
             <!-- Nội dung bóc tách hoặc nhận dạng OCR sẽ tự động nhúng tại đây -->
           </div>
         </div>
@@ -287,6 +300,33 @@
     let currentFileName = 'tailieu_chuyendoi';
     let loadedPagesCanvases = []; // Lưu trữ các canvas gốc để áp dụng bộ lọc nhanh
     let activeFilter = 'original';
+    let conversionMode = 'flow';
+    let extractedDocumentPages = [];
+
+    document.querySelectorAll('.conversion-mode-btn').forEach(button => {
+      button.addEventListener('click', () => setConversionMode(button.dataset.conversionMode));
+    });
+    setConversionMode('flow', false);
+
+    function setConversionMode(mode, rerender = true) {
+      conversionMode = mode === 'layout' ? 'layout' : 'flow';
+      document.querySelectorAll('.conversion-mode-btn').forEach(button => {
+        const active = button.dataset.conversionMode === conversionMode;
+        button.classList.toggle('bg-blue-50', active);
+        button.classList.toggle('border-blue-500', active);
+        button.classList.toggle('text-blue-700', active);
+        button.classList.toggle('bg-white', !active);
+        button.classList.toggle('border-slate-200', !active);
+        button.classList.toggle('text-slate-600', !active);
+      });
+      document.getElementById('conversionModeHint').textContent = conversionMode === 'flow'
+        ? 'Văn bản liền mạch, hạn chế xáo trộn định dạng.'
+        : 'Bảo toàn vị trí dòng, khoảng cách và ngắt trang gần bản gốc.';
+      if (rerender && extractedDocumentPages.length) {
+        renderExtractedDocument();
+        showToast(conversionMode === 'flow' ? 'Đã chuyển sang Flow mode.' : 'Đã chuyển sang Layout mode.');
+      }
+    }
 
     /* ====================================================================
        SỰ KIỆN KÉO THẢ & NẠP TỆP
@@ -323,6 +363,7 @@
       wordSheet.innerHTML = '';
       previewScrollBox.innerHTML = '';
       loadedPagesCanvases = [];
+      extractedDocumentPages = [];
     });
 
     // Cập nhật số từ khi người dùng gõ
@@ -536,6 +577,7 @@
       previewScrollBox.innerHTML = '';
       wordSheet.innerHTML = '';
       loadedPagesCanvases = [];
+      extractedDocumentPages = [];
 
       if (hasTextLayer) {
         // NHÁNH 1: PDF gốc có Text Layer -> Bóc tách toạ độ chính xác 100%
@@ -547,8 +589,9 @@
           const page = await pdfDoc.getPage(p);
           await renderPdfCanvas(page, p);
 
-          const paragraphs = await extractTextCoordinates(page);
-          renderParagraphsToEditor(paragraphs);
+          const pageModel = await extractTextCoordinates(page);
+          extractedDocumentPages.push(pageModel);
+          renderExtractedDocument();
         }
       } else {
         // NHÁNH 2: PDF Scan -> Kích hoạt Tesseract OCR Tiếng Việt
@@ -581,6 +624,7 @@
       previewScrollBox.innerHTML = '';
       wordSheet.innerHTML = '';
       loadedPagesCanvases = [];
+      extractedDocumentPages = [];
 
       setProgress(20, 'Đang nạp và tối ưu hóa ảnh...', 'Khử nhiễu và làm sắc nét văn bản');
 
@@ -676,7 +720,9 @@
       const textContent = await page.getTextContent();
       const viewport = page.getViewport({ scale: 1.0 });
       const items = textContent.items;
-      if (!items || items.length === 0) return [];
+      if (!items || items.length === 0) {
+        return { paragraphs: [], lines: [], width: viewport.width, height: viewport.height };
+      }
 
       const parsedItems = items.map(item => {
         const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
@@ -687,16 +733,18 @@
           text: item.str,
           x: tx[4],
           y: tx[5],
+          width: Math.abs(item.width || 0),
           fontSize: Math.round(fontSize * 10) / 10,
           isBold: fontName.includes('bold') || fontName.includes('b') || fontName.includes('black'),
           isItalic: fontName.includes('italic') || fontName.includes('i') || fontName.includes('oblique')
         };
       }).filter(i => i.text && i.text.trim().length > 0);
 
-      // Sắp xếp theo thứ tự đọc: Từ trên xuống dưới (Y giảm dần), Từ trái qua phải (X tăng dần)
+      // Sau viewport.transform, trục Y của PDF.js tăng từ trên xuống dưới.
+      // Vì vậy phải sắp xếp Y tăng dần; sắp xếp giảm dần sẽ làm cả trang bị đọc ngược.
       parsedItems.sort((a, b) => {
         if (Math.abs(a.y - b.y) <= 4.5) return a.x - b.x;
-        return b.y - a.y;
+        return a.y - b.y;
       });
 
       // Gom thành các dòng
@@ -723,7 +771,6 @@
 
       for (const line of lines) {
         const avgSize = line.items.reduce((s, it) => s + it.fontSize, 0) / line.items.length;
-        const lineText = line.items.map(it => it.text).join(' ');
         const isHeading = avgSize >= 15;
 
         if (!currentPara) {
@@ -742,29 +789,119 @@
       }
       if (currentPara) paragraphs.push(currentPara);
 
-      return paragraphs;
+      paragraphs.forEach(paragraph => {
+        const firstLine = paragraph.lines[0];
+        const firstX = Math.min(...firstLine.items.map(item => item.x));
+        const lastX = Math.max(...firstLine.items.map(item => item.x + (item.width || 0)));
+        const centerOffset = Math.abs(((firstX + lastX) / 2) - (viewport.width / 2));
+        paragraph.alignment = (paragraph.isHeading && centerOffset < viewport.width * 0.09)
+          ? 'center'
+          : 'left';
+      });
+
+      return { paragraphs, lines, width: viewport.width, height: viewport.height };
     }
 
-    function renderParagraphsToEditor(paragraphs) {
-      paragraphs.forEach(p => {
+    function renderExtractedDocument() {
+      wordSheet.innerHTML = '';
+      extractedDocumentPages.forEach((pageModel, pageIndex) => {
+        if (conversionMode === 'layout') renderLayoutPage(pageModel, pageIndex);
+        else renderParagraphsToEditor(pageModel.paragraphs, pageIndex);
+      });
+      updateWordCount();
+    }
+
+    function renderParagraphsToEditor(paragraphs, pageIndex = 0) {
+      paragraphs.forEach((p, paragraphIndex) => {
         const el = document.createElement(p.isHeading ? 'h2' : 'p');
         el.className = p.isHeading 
           ? "text-xl font-bold mb-3 mt-5 text-slate-900" 
-          : "mb-3 leading-relaxed text-justify text-slate-800";
+          : "mb-2 leading-[1.35] text-justify text-slate-800";
+        el.style.textAlign = p.alignment || (p.isHeading ? 'left' : 'justify');
+        el.dataset.sourcePage = String(pageIndex + 1);
 
         let html = "";
-        p.lines.forEach(line => {
-          line.items.forEach(it => {
-            let escaped = escapeHtml(it.text);
-            if (it.isBold && it.isItalic) escaped = `<b><i>${escaped}</i></b>`;
-            else if (it.isBold) escaped = `<b>${escaped}</b>`;
-            else if (it.isItalic) escaped = `<i>${escaped}</i>`;
-            html += escaped + " ";
+        let previousItem = null;
+        p.lines.forEach((line, lineIndex) => {
+          const sortedItems = [...line.items].sort((a, b) => a.x - b.x);
+          sortedItems.forEach((item, itemIndex) => {
+            const isNewLine = lineIndex > 0 && itemIndex === 0;
+            html += getTextSeparator(previousItem, item, isNewLine);
+            html += formatInlineItem(item);
+            previousItem = item;
           });
         });
 
-        el.innerHTML = html.trim();
+        el.innerHTML = html.replace(/^\s+|\s+$/g, '');
         wordSheet.appendChild(el);
+      });
+    }
+
+    function formatInlineItem(item) {
+      let value = escapeHtml(item.text);
+      if (item.isBold && item.isItalic) value = `<b><i>${value}</i></b>`;
+      else if (item.isBold) value = `<b>${value}</b>`;
+      else if (item.isItalic) value = `<i>${value}</i>`;
+      return value;
+    }
+
+    function getTextSeparator(previousItem, item, isNewLine = false) {
+      if (!previousItem) return '';
+      const previousText = previousItem.text || '';
+      const currentText = item.text || '';
+      if (/\s$/.test(previousText) || /^\s/.test(currentText)) return '';
+      if (/^[,.;:!?%\)\]\}]/.test(currentText)) return '';
+      if (/[\(\[\{\/$]$/.test(previousText)) return '';
+      if (isNewLine) return /-$/.test(previousText) ? '' : ' ';
+      const previousEnd = previousItem.x + (previousItem.width || estimateTextWidth(previousItem));
+      const gap = item.x - previousEnd;
+      return gap > Math.max(1.5, item.fontSize * 0.12) ? ' ' : '';
+    }
+
+    function estimateTextWidth(item) {
+      return (item.text || '').length * (item.fontSize || 13) * 0.48;
+    }
+
+    function renderLayoutPage(pageModel, pageIndex) {
+      const sortedLines = [...pageModel.lines].sort((a, b) => a.y - b.y);
+      let previousY = 0;
+
+      sortedLines.forEach((line, lineIndex) => {
+        const el = document.createElement('p');
+        const firstX = Math.min(...line.items.map(item => item.x));
+        const averageSize = line.items.reduce((sum, item) => sum + item.fontSize, 0) / line.items.length;
+        const gap = Math.max(0, line.y - previousY - averageSize);
+        const leftPercent = Math.max(0, Math.min(78, (firstX / pageModel.width) * 100));
+
+        el.className = 'text-slate-900 whitespace-pre-wrap';
+        el.style.margin = `${Math.min(18, gap * 0.75)}pt 0 0 ${leftPercent}%`;
+        el.style.lineHeight = '1.05';
+        el.style.fontSize = `${Math.max(9, Math.min(22, averageSize))}pt`;
+        el.dataset.layoutLine = 'true';
+        el.dataset.indentTwip = String(Math.round((firstX / pageModel.width) * 8500));
+        el.dataset.spaceBefore = String(Math.round(Math.min(360, gap * 15)));
+        if (pageIndex > 0 && lineIndex === 0) {
+          el.dataset.pageBreakBefore = 'true';
+          el.classList.add('border-t-2', 'border-dashed', 'border-slate-300', 'pt-6', 'mt-8');
+        }
+
+        let html = '';
+        let previousItem = null;
+        [...line.items].sort((a, b) => a.x - b.x).forEach(item => {
+          if (previousItem) {
+            const previousEnd = previousItem.x + (previousItem.width || estimateTextWidth(previousItem));
+            const horizontalGap = Math.max(0, item.x - previousEnd);
+            const spaces = horizontalGap > averageSize * 1.6
+              ? Math.min(18, Math.max(2, Math.round(horizontalGap / (averageSize * 0.48))))
+              : (getTextSeparator(previousItem, item) ? 1 : 0);
+            html += ' '.repeat(spaces);
+          }
+          html += formatInlineItem(item);
+          previousItem = item;
+        });
+        el.innerHTML = html;
+        wordSheet.appendChild(el);
+        previousY = line.y;
       });
     }
 
@@ -784,22 +921,46 @@
         }
       });
 
-      const ret = await worker.recognize(canvas);
+      const ret = await worker.recognize(canvas, {}, { blocks: true, text: true });
       await worker.terminate();
 
-      // Phân tách kết quả OCR thành các đoạn văn bản
       const fullText = ret.data.text;
-      const paragraphs = fullText.split(/\n\s*\n/);
-
-      paragraphs.forEach(paraText => {
-        const clean = paraText.trim();
-        if (clean.length > 0) {
-          const p = document.createElement('p');
-          p.className = "mb-3 leading-relaxed text-justify text-slate-800";
-          p.textContent = clean;
-          wordSheet.appendChild(p);
-        }
+      const ocrLines = [];
+      (ret.data.blocks || []).forEach(block => {
+        (block.paragraphs || []).forEach(paragraph => {
+          (paragraph.lines || []).forEach(line => {
+            const text = (line.text || '').trim();
+            if (!text) return;
+            const box = line.bbox || { x0: 0, y0: 0, x1: canvas.width, y1: 20 };
+            ocrLines.push({
+              y: box.y0,
+              items: [{ text, x: box.x0, y: box.y0,
+                fontSize: Math.max(10, Math.min(22, (box.y1 - box.y0) * 0.75)),
+                width: Math.max(0, box.x1 - box.x0),
+                isBold: false, isItalic: false }]
+            });
+          });
+        });
       });
+
+      if (!ocrLines.length) {
+        fullText.split(/\n/).filter(line => line.trim()).forEach((text, index) => {
+          ocrLines.push({
+            y: 30 + index * 22,
+            items: [{ text: text.trim(), x: 0, y: 30 + index * 22,
+              width: estimateTextWidth({ text: text.trim(), fontSize: 13 }),
+              fontSize: 13, isBold: false, isItalic: false }]
+          });
+        });
+      }
+
+      const paragraphs = fullText.split(/\n\s*\n/).map(text => ({
+        isHeading: false,
+        lines: [{ y: 0, items: [{ text: text.trim(), x: 0, fontSize: 13, isBold: false, isItalic: false }] }]
+      })).filter(paragraph => paragraph.lines[0].items[0].text);
+
+      extractedDocumentPages.push({ paragraphs, lines: ocrLines, width: canvas.width, height: canvas.height });
+      renderExtractedDocument();
     }
 
     function escapeHtml(text) {
@@ -864,13 +1025,20 @@
             else if (textAlign === 'right') align = AlignmentType.RIGHT;
             else if (textAlign === 'left') align = AlignmentType.LEFT;
 
+            const isLayoutLine = node.dataset.layoutLine === 'true';
+            const indentLeft = isLayoutLine ? Number(node.dataset.indentTwip || 0) : 0;
+            const spaceBefore = isLayoutLine ? Number(node.dataset.spaceBefore || 0) : 0;
+
             docParagraphs.push(
               new Paragraph({
                 heading: heading,
-                alignment: align,
+                alignment: isLayoutLine ? AlignmentType.LEFT : align,
+                pageBreakBefore: node.dataset.pageBreakBefore === 'true',
+                indent: isLayoutLine ? { left: indentLeft } : undefined,
                 spacing: {
-                  after: heading ? 200 : 120,
-                  line: 276 // Dòng 1.15
+                  before: spaceBefore,
+                  after: isLayoutLine ? 0 : (heading ? 200 : 120),
+                  line: isLayoutLine ? 240 : 276
                 },
                 children: runs.length > 0 ? runs : [
                   new TextRun({
@@ -941,10 +1109,12 @@
         if (child.nodeType === Node.TEXT_NODE) {
           const txt = child.textContent;
           if (txt) {
+            const parentElement = child.parentElement || domNode;
+            const computedPx = parseFloat(window.getComputedStyle(parentElement).fontSize) || 17.33;
             runsArray.push(new TextRun({
               text: txt,
               font: "Times New Roman",
-              size: 26,
+              size: Math.round(computedPx * 1.5),
               bold: hasParentTag(child, 'B') || hasParentTag(child, 'STRONG'),
               italics: hasParentTag(child, 'I') || hasParentTag(child, 'EM'),
               underline: hasParentTag(child, 'U') ? {} : undefined
