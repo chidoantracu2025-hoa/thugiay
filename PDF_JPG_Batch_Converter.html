@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF → JPG | Batch Converter</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#172335;background:#f3f6fb}*{box-sizing:border-box}body{margin:0}main{max-width:1100px;margin:30px auto;padding:0 18px}header{display:flex;justify-content:space-between;align-items:center;gap:15px}h1{font-size:26px;margin:0}p{color:#64748b}.panel{background:white;border:1px solid #e0e7ef;border-radius:16px;padding:20px;margin-top:18px;box-shadow:0 4px 16px #17233508}.drop{border:2px dashed #8ca5cc;border-radius:12px;padding:36px 15px;text-align:center;background:#f8fbff;cursor:pointer}.drop.over{background:#e6f1ff;border-color:#2563eb}.actions,.controls,.stats{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.controls>label{display:flex;flex-direction:column;gap:6px;min-width:145px;flex:1}.controls input,.controls select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px}button{border:0;border-radius:9px;padding:11px 16px;font-size:14px;font-weight:650;background:#e7edf5;color:#1e293b;cursor:pointer}button.primary{background:#2563eb;color:white}button.danger{background:#fee2e2;color:#991b1b}button:disabled{opacity:.45;cursor:not-allowed}.actions{margin-top:16px}.stats>div{background:#f1f5f9;border-radius:10px;padding:10px 16px;flex:1;min-width:130px}.stats strong{display:block;font-size:22px}progress{width:100%;height:16px;accent-color:#2563eb}#fileList{max-height:280px;overflow:auto;margin:0;padding:0;list-style:none}#fileList li{display:flex;justify-content:space-between;gap:12px;padding:10px 4px;border-bottom:1px solid #edf2f7;font-size:13px;overflow-wrap:anywhere}small,.muted{color:#64748b}#log{height:170px;overflow:auto;background:#101827;color:#d7e7fb;padding:12px;border-radius:10px;font:12px/1.6 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}a{color:#2563eb}.note{font-size:13px}.hidden{display:none!important}#results{max-height:240px;overflow:auto}.result{padding:8px 0;border-bottom:1px solid #edf2f7;font-size:13px}footer{margin:20px 0;color:#64748b;font-size:12px}@media(max-width:600px){h1{font-size:22px}main{margin:16px auto}.drop{padding:24px 12px}}
+</style>
+</head>
+<body><main>
+<header><div><h1>📄 PDF → JPG Batch Converter</h1><p>Chuyển đổi PDF hàng loạt ngay trên trình duyệt • 200 DPI mặc định</p></div><span class="muted">Không cần máy chủ</span></header>
+<section class="panel"><div id="drop" class="drop" tabindex="0" role="button" aria-label="Thả PDF hoặc nhấn để chọn file"><strong>Thả file PDF vào đây</strong><p>Hoặc chọn nhiều file / toàn bộ thư mục bên dưới</p><div class="actions" style="justify-content:center"><button id="pickFiles">Chọn file PDF</button><button id="pickFolder">Chọn thư mục</button></div></div><input id="files" type="file" accept="application/pdf,.pdf" multiple hidden><input id="folder" type="file" webkitdirectory directory multiple hidden><p class="note">Thư mục con được nhận diện khi chọn thư mục. Trình duyệt có thể yêu cầu xác nhận quyền truy cập file.</p></section>
+<section class="panel"><h3>Thiết lập chuyển đổi</h3><div class="controls"><label>DPI <select id="dpi"><option>100</option><option>150</option><option selected>200</option><option>300</option><option>400</option><option>600</option></select></label><label>Chất lượng JPG (%) <input id="quality" type="number" min="30" max="100" value="90"></label><label>Nền ảnh <select id="background"><option value="white">Trắng</option><option value="black">Đen</option></select></label><label>Định dạng tên <select id="naming"><option value="number">TênPDF_001.jpg</option><option value="page">TênPDF_page-001.jpg</option></select></label></div><div class="actions"><button id="start" class="primary" disabled>Bắt đầu chuyển đổi</button><button id="cancel" class="danger" disabled>Dừng</button><button id="clear">Xóa danh sách</button><button id="downloadZip" disabled>Tải tất cả (ZIP)</button></div></section>
+<section class="panel"><div class="stats"><div><small>PDF đã chọn</small><strong id="totalFiles">0</strong></div><div><small>PDF hoàn tất</small><strong id="doneFiles">0</strong></div><div><small>JPG đã tạo</small><strong id="donePages">0</strong></div><div><small>PDF lỗi</small><strong id="errorFiles">0</strong></div></div><p id="status" aria-live="polite">Chưa có file được chọn.</p><progress id="progress" max="100" value="0"></progress><small id="progressLabel">0%</small></section>
+<section class="panel"><h3>Danh sách PDF</h3><ul id="fileList"></ul></section>
+<section class="panel"><h3>Ảnh kết quả <small id="resultCount"></small></h3><div id="results"></div><p class="note">Liên kết tải ảnh chỉ tồn tại trong phiên trang hiện tại. Với số lượng ảnh lớn, nên tải ZIP sau khi hoàn tất.</p></section>
+<section class="panel"><h3>Nhật ký xử lý</h3><div id="log" aria-live="polite"></div></section>
+<footer>PDF.js 3.11.174 + JSZip 3.10.1 • Các thư viện được tải từ CDN khi mở trang. PDF không được gửi lên CDN. Với tài liệu nhạy cảm, nên tự lưu trữ thư viện trên máy.</footer>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let items=[],outputs=[],busy=false,cancelled=false,zip=null,urls=[];
+const MAX_CANVAS_PIXELS=32000000;
+function log(message){$('log').textContent+=`[${new Date().toLocaleTimeString('vi-VN')}] ${message}\n`;$('log').scrollTop=$('log').scrollHeight;}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function cleanPath(p){return p.split('/').filter(x=>x&&x!=='.'&&x!=='..').map(x=>x.replace(/[\\:*?"<>|\x00-\x1f]/g,'_')).join('/');}
+function filePath(file){return cleanPath(file.webkitRelativePath||file.name);}
+function refresh(){ $('totalFiles').textContent=items.length;$('start').disabled=busy||!items.length;$('clear').disabled=busy;$('cancel').disabled=!busy;$('downloadZip').disabled=busy||!outputs.length;$('pickFiles').disabled=busy;$('pickFolder').disabled=busy;$('fileList').innerHTML=items.map((x,i)=>`<li><span>${escapeHtml(x.path)} <small>(${(x.file.size/1048576).toFixed(2)} MB)</small></span><span id="state-${i}">${escapeHtml(x.state)}</span></li>`).join('');}
+function addFiles(files){if(busy)return;let added=0;const known=new Set(items.map(x=>`${x.path}|${x.file.size}|${x.file.lastModified}`));for(const file of files){if(!/\.pdf$/i.test(file.name))continue;const path=filePath(file),key=`${path}|${file.size}|${file.lastModified}`;if(known.has(key))continue;known.add(key);items.push({file,path,state:'Chờ'});added++;}log(`Đã thêm ${added} PDF.`);$('status').textContent=`Đã chọn ${items.length} PDF.`;refresh();}
+$('pickFiles').onclick=e=>{e.stopPropagation();$('files').click()};$('pickFolder').onclick=e=>{e.stopPropagation();$('folder').click()};$('files').onchange=e=>{addFiles(e.target.files);e.target.value=''};$('folder').onchange=e=>{addFiles(e.target.files);e.target.value=''};
+const drop=$('drop');drop.onclick=e=>{if(e.target===drop||e.target.tagName==='STRONG'||e.target.tagName==='P')$('files').click()};drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('files').click()}};drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};drop.ondragleave=()=>drop.classList.remove('over');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');addFiles(e.dataTransfer.files);log('Kéo-thả thư mục có thể không lấy được file trong thư mục con; hãy dùng Chọn thư mục.')};
+function cleanup(){for(const u of urls)URL.revokeObjectURL(u);urls=[];outputs=[];zip=null;$('results').innerHTML='';$('resultCount').textContent='';$('doneFiles').textContent='0';$('donePages').textContent='0';$('errorFiles').textContent='0';$('progress').value=0;$('progressLabel').textContent='0%';}
+$('clear').onclick=()=>{if(busy)return;items=[];cleanup();$('status').textContent='Chưa có file được chọn.';refresh()};$('cancel').onclick=()=>{cancelled=true;log('Đã yêu cầu dừng. Đợi trang đang xử lý kết thúc...')};
+function updateProgress(fileIndex,fileCount,page,totalPages){let pct=((fileIndex+(totalPages?page/totalPages:0))/fileCount)*100;$('progress').value=Math.min(100,pct);$('progressLabel').textContent=`${Math.round(pct)}%`;}
+function canvasBlob(canvas,quality){return new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('Không tạo được JPG (thiếu bộ nhớ?)')),'image/jpeg',quality));}
+function addResult(path,blob){const url=URL.createObjectURL(blob);urls.push(url);const row=document.createElement('div');row.className='result';const a=document.createElement('a');a.href=url;a.download=path.split('/').pop();a.textContent=path;row.append(a);$('results').append(row);$('resultCount').textContent=`(${outputs.length} ảnh)`;}
+function uniquePath(path,used){let name=path,ext='.jpg',i=2;while(used.has(name)){name=path.slice(0,-ext.length)+`_${i++}`+ext;}used.add(name);return name;}
+$('start').onclick=async()=>{
+ if(busy||!items.length)return;if(!window.pdfjsLib||!window.JSZip){log('Không tải được PDF.js hoặc JSZip. Kiểm tra Internet/CDN.');return;}
+ busy=true;cancelled=false;cleanup();zip=new JSZip();const used=new Set();const dpi=Number($('dpi').value),quality=Math.max(.3,Math.min(1,Number($('quality').value)/100));const bg=$('background').value==='black'?'#000000':'#ffffff';const naming=$('naming').value;let done=0,errors=0,pagesDone=0;
+ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+ refresh();log(`Bắt đầu: ${items.length} PDF, ${dpi} DPI, JPG ${Math.round(quality*100)}%.`);
+ for(let i=0;i<items.length;i++){
+  if(cancelled)break;const item=items[i];item.state='Đang xử lý';refresh();let pdf=null;
+  try{
+   const buffer=await item.file.arrayBuffer();pdf=await pdfjsLib.getDocument({data:new Uint8Array(buffer),useSystemFonts:true}).promise;
+   const base=item.path.replace(/\.pdf$/i,'');log(`${item.path}: ${pdf.numPages} trang.`);
+   for(let pageNo=1;pageNo<=pdf.numPages;pageNo++){
+    if(cancelled)break;const page=await pdf.getPage(pageNo);const viewport=page.getViewport({scale:dpi/72});const w=Math.ceil(viewport.width),h=Math.ceil(viewport.height);
+    if(w*h>MAX_CANVAS_PIXELS){page.cleanup();throw new Error(`Trang ${pageNo}: ${w}×${h} vượt giới hạn ${MAX_CANVAS_PIXELS.toLocaleString()} pixel. Hãy giảm DPI.`)}
+    const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:false});if(!ctx)throw new Error('Không tạo được canvas');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+    try{await page.render({canvasContext:ctx,viewport,background:bg}).promise;const blob=await canvasBlob(canvas,quality);const suffix=naming==='page'?`_page-${String(pageNo).padStart(3,'0')}`:`_${String(pageNo).padStart(3,'0')}`;const target=uniquePath(cleanPath(base+suffix+'.jpg'),used);zip.file(target,blob);outputs.push({path:target,blob});addResult(target,blob);pagesDone++;$('donePages').textContent=pagesDone;updateProgress(i,items.length,pageNo,pdf.numPages);$('status').textContent=`${item.path} — trang ${pageNo}/${pdf.numPages}`;}
+    finally{canvas.width=0;canvas.height=0;page.cleanup()}
+    await new Promise(resolve=>setTimeout(resolve,0));
+   }
+   if(cancelled){item.state='Đã dừng';}else{item.state='Hoàn tất';done++;$('doneFiles').textContent=done;}
+  }catch(e){errors++;item.state='Lỗi';$('errorFiles').textContent=errors;log(`LỖI ${item.path}: ${e.message||e}`)}
+  finally{if(pdf)try{await pdf.destroy()}catch(e){};refresh();updateProgress(i+1,items.length,0,0)}
+ }
+ busy=false;refresh();$('status').textContent=cancelled?`Đã dừng. ${pagesDone} JPG đã tạo.`:`Hoàn tất: ${done} PDF, ${pagesDone} JPG, ${errors} PDF lỗi.`;log($('status').textContent);
+};
+$('downloadZip').onclick=async()=>{if(busy||!zip||!outputs.length)return;const btn=$('downloadZip');btn.disabled=true;btn.textContent='Đang tạo ZIP...';try{const blob=await zip.generateAsync({type:'blob',compression:'STORE',streamFiles:true},metadata=>{$('status').textContent=`Đóng gói ZIP: ${Math.round(metadata.percent)}%`;});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`pdf-to-jpg-${new Date().toISOString().slice(0,10)}.zip`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);log(`Đã tạo ZIP: ${(blob.size/1048576).toFixed(1)} MB`)}catch(e){log(`LỖI ZIP: ${e.message||e}`)}finally{btn.textContent='Tải tất cả (ZIP)';btn.disabled=false}};
+refresh();
+</script></body></html>

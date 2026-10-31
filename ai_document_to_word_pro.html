@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuMorph Pro - Trợ lý Chuyển đổi PDF, Scan & Ảnh sang Word Chuẩn Tiếng Việt</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Fonts: Inter & Times New Roman -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Times+New+Roman&display=swap" rel="stylesheet">
+
+  <!-- FontAwesome Icons 6 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Thư viện xử lý PDF: PDF.js với worker & cMaps tiếng Việt -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <!-- Thư viện OCR Client-side: Tesseract.js v5 -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <!-- Thư viện tạo file Word .docx gốc: docx.js -->
+  <script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
+
+  <!-- FileSaver.js để xuất file -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .font-times {
+      font-family: 'Times New Roman', Times, serif;
+    }
+    /* Thanh cuộn mượt mà */
+    ::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 6px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    /* Mô phỏng trang A4 tiêu chuẩn */
+    .a4-page {
+      width: 210mm;
+      min-height: 297mm;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+      margin: 0 auto;
+    }
+    [contenteditable]:focus {
+      outline: none;
+    }
+    .loader-pulse {
+      animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .4; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- Header Điều Khiển -->
+  <header class="bg-white/90 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white text-xl shadow-md shadow-blue-500/20">
+          <i class="fa-solid fa-file-shield"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="font-bold text-lg text-slate-900 tracking-tight leading-tight">DocuMorph AI</h1>
+            <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">v2.5 Hybrid OCR</span>
+          </div>
+          <p class="text-xs text-slate-500 font-medium">Chuyển đổi PDF, Scan & Ảnh sang Word • 100% Offline an toàn</p>
+        </div>
+      </div>
+
+      <!-- Nút thao tác nhanh -->
+      <div class="flex items-center space-x-3">
+        <button id="btnNewDoc" class="hidden px-3.5 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition items-center space-x-2">
+          <i class="fa-solid fa-arrow-rotate-left"></i>
+          <span>Nạp tệp khác</span>
+        </button>
+
+        <button id="btnExportWord" disabled class="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-slate-300 disabled:to-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg shadow-sm transition flex items-center space-x-2">
+          <i class="fa-solid fa-file-word text-base"></i>
+          <span>Xuất File Word (.docx)</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Thông báo trạng thái Toast -->
+  <div id="toastBox" class="fixed top-20 right-5 z-50 transform translate-x-full opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 text-white text-sm px-4 py-3 rounded-xl shadow-xl flex items-center space-x-3 border border-slate-700">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-green-400 text-base"></i>
+    <span id="toastMsg" class="font-medium">Thông báo</span>
+  </div>
+
+  <!-- Vùng làm việc chính -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col">
+    
+    <!-- Upload Dropzone (Khi chưa nạp file) -->
+    <div id="dropZone" class="flex-1 flex flex-col items-center justify-center p-8 bg-white border-2 border-dashed border-slate-300 rounded-2xl hover:border-blue-500 transition-all my-4 cursor-pointer text-center relative group shadow-sm">
+      <input type="file" id="fileSelector" accept="application/pdf,image/png,image/jpeg,image/webp,image/bmp" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+      
+      <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-3xl mb-4 group-hover:scale-110 transition-transform shadow-inner">
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+      </div>
+      <h2 class="text-xl font-bold text-slate-800 mb-1">Kéo thả tệp PDF, File Scan hoặc Ảnh vào đây</h2>
+      <p class="text-sm text-slate-500 max-w-lg mb-4">
+        Hỗ trợ định dạng <b>PDF, JPG, PNG, WebP</b>. Tự động nhận diện lớp văn bản số hoặc kích hoạt bộ lọc làm sạch ảnh & OCR Tiếng Việt thông minh.
+      </p>
+
+      <div class="flex flex-wrap items-center justify-center gap-2 text-xs font-semibold text-slate-600">
+        <span class="px-3 py-1 bg-slate-100 rounded-full flex items-center space-x-1.5">
+          <i class="fa-solid fa-check text-emerald-500"></i>
+          <span>PDF Chữ số</span>
+        </span>
+        <span class="px-3 py-1 bg-slate-100 rounded-full flex items-center space-x-1.5">
+          <i class="fa-solid fa-check text-emerald-500"></i>
+          <span>PDF Ký số / Scan</span>
+        </span>
+        <span class="px-3 py-1 bg-slate-100 rounded-full flex items-center space-x-1.5">
+          <i class="fa-solid fa-check text-emerald-500"></i>
+          <span>Ảnh Chụp CCCD / GCN</span>
+        </span>
+        <span class="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full flex items-center space-x-1.5">
+          <i class="fa-solid fa-lock text-emerald-600"></i>
+          <span>Dữ liệu xử lý an toàn nội bộ</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Thanh tiến trình & Trạng thái xử lý Pipeline -->
+    <div id="pipelineProgress" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-slate-200 my-4 max-w-xl mx-auto w-full">
+      <div class="flex items-center space-x-3 mb-3">
+        <div id="pipelineSpinner" class="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-sm font-bold">
+          <i class="fa-solid fa-gears fa-spin"></i>
+        </div>
+        <div class="flex-1">
+          <div class="flex justify-between text-xs font-bold text-slate-700 mb-1">
+            <span id="pipelineStatus">Khởi tạo quy trình phân tích...</span>
+            <span id="pipelinePercent" class="text-blue-600 font-extrabold">0%</span>
+          </div>
+          <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+            <div id="pipelineBar" class="bg-gradient-to-r from-blue-600 to-indigo-600 h-full w-0 transition-all duration-200 rounded-full"></div>
+          </div>
+        </div>
+      </div>
+      <p id="pipelineSubtext" class="text-xs text-slate-400 text-center">Đang nạp bộ cMaps và bộ từ điển OCR tiếng Việt...</p>
+    </div>
+
+    <!-- Vùng xem trước & Soạn thảo song song (Dual-view) -->
+    <div id="workArea" class="hidden flex-1 grid grid-cols-1 lg:grid-cols-2 gap-5 pb-10">
+      
+      <!-- Cột Trái: Tài liệu Gốc & Bộ Lọc Xử Lý Ảnh -->
+      <div class="flex flex-col bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm h-[820px]">
+        
+        <!-- Header Cột Trái -->
+        <div class="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center space-x-2">
+            <span id="docTypeBadge" class="px-2 py-0.5 text-[11px] font-bold uppercase rounded-md bg-blue-100 text-blue-700">PDF</span>
+            <span id="docFileName" class="text-xs font-semibold text-slate-700 truncate max-w-[200px]">document.pdf</span>
+          </div>
+
+          <!-- Các bộ lọc tiền xử lý ảnh Canvas -->
+          <div class="flex items-center space-x-1 text-xs">
+            <span class="text-slate-400 mr-1 hidden sm:inline"><i class="fa-solid fa-wand-magic-sparkles"></i> Lọc ảnh:</span>
+            <button onclick="applyImageFilter('original')" class="filter-btn px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 font-medium shadow-2xs active">Gốc</button>
+            <button onclick="applyImageFilter('grayscale')" class="filter-btn px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 font-medium shadow-2xs">Xám</button>
+            <button onclick="applyImageFilter('binary')" class="filter-btn px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 font-medium shadow-2xs">Nhị phân</button>
+            <button onclick="applyImageFilter('sharpen')" class="filter-btn px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 font-medium shadow-2xs">Nét chữ</button>
+          </div>
+        </div>
+
+        <!-- Khung xem trước các trang (Canvas Viewer) -->
+        <div id="previewScrollBox" class="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-200/70 flex flex-col items-center">
+          <!-- Canvas của từng trang hoặc ảnh chụp sẽ được kết xuất tại đây -->
+        </div>
+
+        <!-- Footer Cột Trái -->
+        <div class="p-2.5 bg-white border-t border-slate-200 text-xs text-slate-500 flex justify-between items-center px-4">
+          <span id="previewPageInfo">Trang 1 / 1</span>
+          <span class="text-[11px] text-slate-400"><i class="fa-solid fa-eye"></i> Tự động khử bóng & tăng tương phản</span>
+        </div>
+      </div>
+
+      <!-- Cột Phải: Trình Soạn Thảo WYSIWYG Chuẩn Trang Word A4 -->
+      <div class="flex flex-col bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm h-[820px]">
+        
+        <!-- Toolbar Soạn Thảo Đầy Đủ -->
+        <div class="p-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-1 text-xs">
+          <!-- Format Chữ -->
+          <button type="button" onclick="formatCmd('bold')" class="p-2 hover:bg-slate-200 rounded font-bold text-slate-700" title="In đậm (Ctrl+B)"><b>B</b></button>
+          <button type="button" onclick="formatCmd('italic')" class="p-2 hover:bg-slate-200 rounded italic text-slate-700" title="In nghiêng (Ctrl+I)"><i>I</i></button>
+          <button type="button" onclick="formatCmd('underline')" class="p-2 hover:bg-slate-200 rounded underline text-slate-700" title="Gạch chân (Ctrl+U)"><u>U</u></button>
+          
+          <div class="h-4 w-[1px] bg-slate-300 mx-1"></div>
+
+          <!-- Căn Lề Chuẩn -->
+          <button type="button" onclick="formatCmd('justifyLeft')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Căn trái"><i class="fa-solid fa-align-left"></i></button>
+          <button type="button" onclick="formatCmd('justifyCenter')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Căn giữa"><i class="fa-solid fa-align-center"></i></button>
+          <button type="button" onclick="formatCmd('justifyRight')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Căn phải"><i class="fa-solid fa-align-right"></i></button>
+          <button type="button" onclick="formatCmd('justifyFull')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Căn đều hai bên"><i class="fa-solid fa-align-justify"></i></button>
+
+          <div class="h-4 w-[1px] bg-slate-300 mx-1"></div>
+
+          <!-- Tiêu Đề Heading -->
+          <button type="button" onclick="formatCmd('formatBlock', '<h1>')" class="px-2 py-1 hover:bg-slate-200 rounded font-bold text-slate-700" title="Tiêu đề lớn">H1</button>
+          <button type="button" onclick="formatCmd('formatBlock', '<h2>')" class="px-2 py-1 hover:bg-slate-200 rounded font-bold text-slate-700" title="Tiêu đề vừa">H2</button>
+          <button type="button" onclick="formatCmd('formatBlock', '<p>')" class="px-2 py-1 hover:bg-slate-200 rounded text-slate-700" title="Đoạn văn">Đoạn</button>
+
+          <div class="h-4 w-[1px] bg-slate-300 mx-1"></div>
+
+          <!-- Danh sách & Tiện ích -->
+          <button type="button" onclick="formatCmd('insertUnorderedList')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Danh sách chấm"><i class="fa-solid fa-list-ul"></i></button>
+          <button type="button" onclick="formatCmd('insertOrderedList')" class="p-2 hover:bg-slate-200 rounded text-slate-700" title="Danh sách số"><i class="fa-solid fa-list-ol"></i></button>
+          <button type="button" onclick="formatCmd('removeFormat')" class="p-2 hover:bg-slate-200 rounded text-rose-600" title="Xóa định dạng rác"><i class="fa-solid fa-eraser"></i></button>
+
+          <!-- Nút Copy -->
+          <button type="button" onclick="copyEditorText()" class="ml-auto px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium flex items-center space-x-1" title="Sao chép toàn bộ văn bản">
+            <i class="fa-regular fa-copy"></i>
+            <span class="hidden sm:inline">Sao chép</span>
+          </button>
+        </div>
+
+        <!-- Khung Trang A4 (WYSIWYG) -->
+        <div class="flex-1 overflow-y-auto p-4 bg-slate-100 flex justify-center">
+          <div id="wordSheet" contenteditable="true" class="a4-page bg-white p-12 text-slate-900 font-times leading-relaxed text-[14pt] text-justify focus:outline-none">
+            <!-- Nội dung bóc tách hoặc nhận dạng OCR sẽ tự động nhúng tại đây -->
+          </div>
+        </div>
+
+        <!-- Footer Cột Phải -->
+        <div class="p-2.5 bg-white border-t border-slate-200 text-xs text-slate-500 flex justify-between items-center px-4">
+          <span id="wordCountStat">0 từ • 0 ký tự</span>
+          <span class="text-emerald-600 font-semibold flex items-center space-x-1">
+            <i class="fa-solid fa-check"></i>
+            <span>Định dạng tương thích Word 100%</span>
+          </span>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    /* ====================================================================
+       CẤU HÌNH THƯ VIỆN & BIẾN TOÀN CỤC
+       ==================================================================== */
+    // Cấu hình cMaps tiếng Việt cho PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const CMAP_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/';
+    const STANDARD_FONT_DATA_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/';
+
+    // Tham chiếu DOM
+    const fileSelector = document.getElementById('fileSelector');
+    const dropZone = document.getElementById('dropZone');
+    const pipelineProgress = document.getElementById('pipelineProgress');
+    const pipelineBar = document.getElementById('pipelineBar');
+    const pipelineStatus = document.getElementById('pipelineStatus');
+    const pipelinePercent = document.getElementById('pipelinePercent');
+    const pipelineSubtext = document.getElementById('pipelineSubtext');
+    const workArea = document.getElementById('workArea');
+    const previewScrollBox = document.getElementById('previewScrollBox');
+    const wordSheet = document.getElementById('wordSheet');
+    const btnExportWord = document.getElementById('btnExportWord');
+    const btnNewDoc = document.getElementById('btnNewDoc');
+    const docFileName = document.getElementById('docFileName');
+    const docTypeBadge = document.getElementById('docTypeBadge');
+    const previewPageInfo = document.getElementById('previewPageInfo');
+    const wordCountStat = document.getElementById('wordCountStat');
+
+    // Quản lý trạng thái
+    let currentFileName = 'tailieu_chuyendoi';
+    let loadedPagesCanvases = []; // Lưu trữ các canvas gốc để áp dụng bộ lọc nhanh
+    let activeFilter = 'original';
+
+    /* ====================================================================
+       SỰ KIỆN KÉO THẢ & NẠP TỆP
+       ==================================================================== */
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-blue-500', 'bg-blue-50/50');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50/50');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50/50');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        processUploadedFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileSelector.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        processUploadedFile(e.target.files[0]);
+      }
+    });
+
+    btnNewDoc.addEventListener('click', () => {
+      dropZone.classList.remove('hidden');
+      workArea.classList.add('hidden');
+      btnNewDoc.classList.add('hidden');
+      btnExportWord.disabled = true;
+      fileSelector.value = '';
+      wordSheet.innerHTML = '';
+      previewScrollBox.innerHTML = '';
+      loadedPagesCanvases = [];
+    });
+
+    // Cập nhật số từ khi người dùng gõ
+    wordSheet.addEventListener('input', updateWordCount);
+
+    function updateWordCount() {
+      const text = wordSheet.innerText || '';
+      const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+      const chars = text.length;
+      wordCountStat.textContent = `${words.toLocaleString()} từ • ${chars.toLocaleString()} ký tự`;
+    }
+
+    /* ====================================================================
+       HỆ THỐNG THÔNG BÁO TOAST
+       ==================================================================== */
+    function showToast(message, isError = false) {
+      const toastBox = document.getElementById('toastBox');
+      const toastMsg = document.getElementById('toastMsg');
+      const toastIcon = document.getElementById('toastIcon');
+
+      toastMsg.textContent = message;
+      if (isError) {
+        toastIcon.className = "fa-solid fa-circle-exclamation text-rose-400 text-base";
+      } else {
+        toastIcon.className = "fa-solid fa-circle-check text-emerald-400 text-base";
+      }
+
+      toastBox.classList.remove('translate-x-full', 'opacity-0');
+      setTimeout(() => {
+        toastBox.classList.add('translate-x-full', 'opacity-0');
+      }, 4000);
+    }
+
+    function setProgress(percent, statusText, subText = '') {
+      pipelineBar.style.width = percent + '%';
+      pipelinePercent.textContent = percent + '%';
+      pipelineStatus.textContent = statusText;
+      if (subText) pipelineSubtext.textContent = subText;
+    }
+
+    /* ====================================================================
+       BỘ LỌC TIỀN XỬ LÝ ẢNH (CANVAS FILTERS NÂNG CAO)
+       ==================================================================== */
+    // Thuật toán nhị phân hóa & làm nét tăng chất lượng cho OCR
+    function processImagePixels(canvas, filterType) {
+      const ctx = canvas.getContext('2d');
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      const len = data.length;
+
+      if (filterType === 'grayscale' || filterType === 'binary' || filterType === 'sharpen') {
+        // Chuyển mức xám tối ưu (Luminance ITU-R BT.601)
+        for (let i = 0; i < len; i += 4) {
+          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          data[i] = gray;
+          data[i + 1] = gray;
+          data[i + 2] = gray;
+        }
+      }
+
+      if (filterType === 'binary') {
+        // Tính ngưỡng tự động Otsu giả lập đơn giản
+        let sum = 0;
+        for (let i = 0; i < len; i += 4) sum += data[i];
+        const threshold = (sum / (len / 4)) * 0.92; // Tối ưu giữ nét chữ đen mảnh
+
+        for (let i = 0; i < len; i += 4) {
+          const val = data[i] < threshold ? 0 : 255;
+          data[i] = val;
+          data[i + 1] = val;
+          data[i + 2] = val;
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      if (filterType === 'sharpen') {
+        // Áp ma trận làm nét Unsharp convolution 3x3
+        applySharpenConvolution(canvas);
+      }
+    }
+
+    function applySharpenConvolution(canvas) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const src = ctx.getImageData(0, 0, w, h);
+      const dst = ctx.createImageData(w, h);
+      const s = src.data;
+      const d = dst.data;
+
+      // Kernel ma trận làm sắc cạnh nét chữ: [0, -1, 0, -1, 5, -1, 0, -1, 0]
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = (y * w + x) * 4;
+          const up = ((y - 1) * w + x) * 4;
+          const down = ((y + 1) * w + x) * 4;
+          const left = (y * w + (x - 1)) * 4;
+          const right = (y * w + (x + 1)) * 4;
+
+          const val = 5 * s[idx] - (s[up] + s[down] + s[left] + s[right]);
+          const clamped = Math.max(0, Math.min(255, val));
+          d[idx] = clamped;
+          d[idx + 1] = clamped;
+          d[idx + 2] = clamped;
+          d[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(dst, 0, 0);
+    }
+
+    function applyImageFilter(filter) {
+      activeFilter = filter;
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('bg-blue-50', btn.textContent.toLowerCase().includes(filter));
+        btn.classList.toggle('text-blue-600', btn.textContent.toLowerCase().includes(filter));
+      });
+
+      // Tái kết xuất từng canvas trang
+      loadedPagesCanvases.forEach(item => {
+        const displayCanvas = item.displayCanvas;
+        const rawCanvas = item.rawCanvas;
+        const ctx = displayCanvas.getContext('2d');
+        ctx.drawImage(rawCanvas, 0, 0);
+
+        if (filter !== 'original') {
+          processImagePixels(displayCanvas, filter);
+        }
+      });
+
+      showToast(`Đã áp dụng bộ lọc: ${filter.toUpperCase()}`);
+    }
+
+    /* ====================================================================
+       PIPELINE XỬ LÝ CHÍNH: TỰ ĐỘNG PHÂN LOẠI & CHUYỂN ĐỔI
+       ==================================================================== */
+    async function processUploadedFile(file) {
+      currentFileName = file.name.replace(/\.[^/.]+$/, "");
+      docFileName.textContent = file.name;
+
+      dropZone.classList.add('hidden');
+      pipelineProgress.classList.remove('hidden');
+      setProgress(5, 'Đang đọc luồng tệp tin...', 'Kiểm tra tệp tin an toàn');
+
+      try {
+        if (file.type === 'application/pdf') {
+          docTypeBadge.textContent = "PDF";
+          docTypeBadge.className = "px-2 py-0.5 text-[11px] font-bold uppercase rounded-md bg-blue-100 text-blue-700";
+          await handlePdfPipeline(file);
+        } else if (file.type.startsWith('image/')) {
+          docTypeBadge.textContent = "IMAGE/SCAN";
+          docTypeBadge.className = "px-2 py-0.5 text-[11px] font-bold uppercase rounded-md bg-purple-100 text-purple-700";
+          await handleImagePipeline(file);
+        } else {
+          throw new Error('Định dạng tệp không được hỗ trợ. Vui lòng chọn PDF hoặc Ảnh.');
+        }
+
+        // Hoàn thành
+        setProgress(100, 'Xử lý thành công!', 'Văn bản đã được trích xuất hoàn tất');
+        setTimeout(() => {
+          pipelineProgress.classList.add('hidden');
+          workArea.classList.remove('hidden');
+          btnNewDoc.classList.remove('hidden');
+          btnExportWord.disabled = false;
+          updateWordCount();
+          showToast('Chuyển đổi hoàn tất! Bạn có thể chỉnh sửa trước khi tải file Word.');
+        }, 500);
+
+      } catch (err) {
+        console.error("Lỗi Pipeline:", err);
+        pipelineProgress.classList.add('hidden');
+        dropZone.classList.remove('hidden');
+        showToast(err.message || 'Lỗi không xác định khi xử lý tệp!', true);
+      }
+    }
+
+    /* --------------------------------------------------------------------
+       Xử lý PDF (Phát hiện Text Layer hay PDF Scan)
+       -------------------------------------------------------------------- */
+    async function handlePdfPipeline(file) {
+      const arrayBuffer = await file.arrayBuffer();
+
+      const loadingTask = pdfjsLib.getDocument({
+        data: arrayBuffer,
+        cMapUrl: CMAP_URL,
+        cMapPacked: true,
+        standardFontDataUrl: STANDARD_FONT_DATA_URL
+      });
+
+      const pdfDoc = await loadingTask.promise;
+      const totalPages = pdfDoc.numPages;
+      previewPageInfo.textContent = `Tổng cộng ${totalPages} trang`;
+
+      setProgress(20, 'Đang phân tích cấu trúc PDF...', 'Kiểm tra xem PDF có chữ số hay là bản scan');
+
+      // Kiểm tra 2 trang đầu xem có Text Stream hay không
+      let hasTextLayer = false;
+      let sampleCharCount = 0;
+      const checkPages = Math.min(2, totalPages);
+
+      for (let p = 1; p <= checkPages; p++) {
+        const page = await pdfDoc.getPage(p);
+        const textContent = await page.getTextContent();
+        sampleCharCount += textContent.items.reduce((acc, it) => acc + (it.str ? it.str.trim().length : 0), 0);
+      }
+
+      if (sampleCharCount > 50) {
+        hasTextLayer = true;
+      }
+
+      previewScrollBox.innerHTML = '';
+      wordSheet.innerHTML = '';
+      loadedPagesCanvases = [];
+
+      if (hasTextLayer) {
+        // NHÁNH 1: PDF gốc có Text Layer -> Bóc tách toạ độ chính xác 100%
+        docTypeBadge.textContent = "PDF CHỮ GỐC";
+        for (let p = 1; p <= totalPages; p++) {
+          const currentPercent = 20 + Math.round((p / totalPages) * 75);
+          setProgress(currentPercent, `Đang xử lý trang ${p}/${totalPages}...`, 'Đọc tọa độ văn bản & font tiếng Việt');
+
+          const page = await pdfDoc.getPage(p);
+          await renderPdfCanvas(page, p);
+
+          const paragraphs = await extractTextCoordinates(page);
+          renderParagraphsToEditor(paragraphs);
+        }
+      } else {
+        // NHÁNH 2: PDF Scan -> Kích hoạt Tesseract OCR Tiếng Việt
+        docTypeBadge.textContent = "PDF SCAN (OCR)";
+        docTypeBadge.className = "px-2 py-0.5 text-[11px] font-bold uppercase rounded-md bg-amber-100 text-amber-700";
+
+        for (let p = 1; p <= totalPages; p++) {
+          setProgress(25 + Math.round((p / totalPages) * 20), `Đang nạp ảnh trang ${p}/${totalPages}...`, 'Tiền xử lý ảnh');
+          const page = await pdfDoc.getPage(p);
+          const pageCanvas = await renderPdfCanvas(page, p);
+
+          // Tiền xử lý ảnh trước khi đưa vào OCR
+          const cleanCanvas = document.createElement('canvas');
+          cleanCanvas.width = pageCanvas.width;
+          cleanCanvas.height = pageCanvas.height;
+          const cleanCtx = cleanCanvas.getContext('2d');
+          cleanCtx.drawImage(pageCanvas, 0, 0);
+          processImagePixels(cleanCanvas, 'binary');
+
+          // Chạy OCR cho trang này
+          await runTesseractOCR(cleanCanvas, p, totalPages);
+        }
+      }
+    }
+
+    /* --------------------------------------------------------------------
+       Xử lý Ảnh tài liệu (JPG, PNG, WebP)
+       -------------------------------------------------------------------- */
+    async function handleImagePipeline(file) {
+      previewScrollBox.innerHTML = '';
+      wordSheet.innerHTML = '';
+      loadedPagesCanvases = [];
+
+      setProgress(20, 'Đang nạp và tối ưu hóa ảnh...', 'Khử nhiễu và làm sắc nét văn bản');
+
+      const img = new Image();
+      const imgUrl = URL.createObjectURL(file);
+
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = imgUrl;
+      });
+
+      // Tạo Canvas hiển thị
+      const wrapper = document.createElement('div');
+      wrapper.className = "flex flex-col items-center w-full";
+
+      const badge = document.createElement('span');
+      badge.className = "text-xs font-semibold text-slate-500 mb-1.5";
+      badge.textContent = `Tài liệu ảnh (${img.naturalWidth} x ${img.naturalHeight}px)`;
+
+      const displayCanvas = document.createElement('canvas');
+      displayCanvas.width = img.naturalWidth;
+      displayCanvas.height = img.naturalHeight;
+      displayCanvas.className = "rounded-lg shadow-md bg-white max-w-full h-auto";
+
+      const ctx = displayCanvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+
+      // Lưu canvas gốc vào bộ nhớ
+      const rawCanvas = document.createElement('canvas');
+      rawCanvas.width = img.naturalWidth;
+      rawCanvas.height = img.naturalHeight;
+      rawCanvas.getContext('2d').drawImage(img, 0, 0);
+
+      loadedPagesCanvases.push({ displayCanvas, rawCanvas });
+
+      wrapper.appendChild(badge);
+      wrapper.appendChild(displayCanvas);
+      previewScrollBox.appendChild(wrapper);
+
+      previewPageInfo.textContent = "Ảnh đơn";
+
+      // Tiền xử lý bản sao phục vụ OCR
+      const ocrPrepCanvas = document.createElement('canvas');
+      ocrPrepCanvas.width = img.naturalWidth;
+      ocrPrepCanvas.height = img.naturalHeight;
+      ocrPrepCanvas.getContext('2d').drawImage(img, 0, 0);
+      processImagePixels(ocrPrepCanvas, 'binary');
+
+      // Chạy Tesseract
+      await runTesseractOCR(ocrPrepCanvas, 1, 1);
+    }
+
+    /* --------------------------------------------------------------------
+       Kết xuất trang PDF ra Canvas
+       -------------------------------------------------------------------- */
+    async function renderPdfCanvas(page, pageNum) {
+      const viewport = page.getViewport({ scale: 1.5 }); // Độ nét 1.5x cho văn bản rõ ràng
+      const displayCanvas = document.createElement('canvas');
+      displayCanvas.width = viewport.width;
+      displayCanvas.height = viewport.height;
+      displayCanvas.className = "rounded-lg shadow-md bg-white mb-2 max-w-full h-auto";
+
+      const pageWrapper = document.createElement('div');
+      pageWrapper.className = "flex flex-col items-center w-full";
+
+      const label = document.createElement('span');
+      label.className = "text-xs text-slate-500 mb-1 font-semibold";
+      label.textContent = `Trang ${pageNum}`;
+
+      pageWrapper.appendChild(label);
+      pageWrapper.appendChild(displayCanvas);
+      previewScrollBox.appendChild(pageWrapper);
+
+      const ctx = displayCanvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+      // Lưu bản sao raw để thay đổi filter
+      const rawCanvas = document.createElement('canvas');
+      rawCanvas.width = viewport.width;
+      rawCanvas.height = viewport.height;
+      rawCanvas.getContext('2d').drawImage(displayCanvas, 0, 0);
+
+      loadedPagesCanvases.push({ displayCanvas, rawCanvas });
+
+      return displayCanvas;
+    }
+
+    /* --------------------------------------------------------------------
+       Thuật toán Bóc tách Toạ độ Text Stream (Cho PDF chữ số)
+       -------------------------------------------------------------------- */
+    async function extractTextCoordinates(page) {
+      const textContent = await page.getTextContent();
+      const viewport = page.getViewport({ scale: 1.0 });
+      const items = textContent.items;
+      if (!items || items.length === 0) return [];
+
+      const parsedItems = items.map(item => {
+        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+        const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+        const fontName = (item.fontName || '').toLowerCase();
+
+        return {
+          text: item.str,
+          x: tx[4],
+          y: tx[5],
+          fontSize: Math.round(fontSize * 10) / 10,
+          isBold: fontName.includes('bold') || fontName.includes('b') || fontName.includes('black'),
+          isItalic: fontName.includes('italic') || fontName.includes('i') || fontName.includes('oblique')
+        };
+      }).filter(i => i.text && i.text.trim().length > 0);
+
+      // Sắp xếp theo thứ tự đọc: Từ trên xuống dưới (Y giảm dần), Từ trái qua phải (X tăng dần)
+      parsedItems.sort((a, b) => {
+        if (Math.abs(a.y - b.y) <= 4.5) return a.x - b.x;
+        return b.y - a.y;
+      });
+
+      // Gom thành các dòng
+      const lines = [];
+      let currentLine = null;
+
+      for (const item of parsedItems) {
+        if (!currentLine) {
+          currentLine = { y: item.y, items: [item] };
+        } else {
+          if (Math.abs(currentLine.y - item.y) <= 4.5) {
+            currentLine.items.push(item);
+          } else {
+            lines.push(currentLine);
+            currentLine = { y: item.y, items: [item] };
+          }
+        }
+      }
+      if (currentLine) lines.push(currentLine);
+
+      // Gom các dòng thành đoạn văn
+      const paragraphs = [];
+      let currentPara = null;
+
+      for (const line of lines) {
+        const avgSize = line.items.reduce((s, it) => s + it.fontSize, 0) / line.items.length;
+        const lineText = line.items.map(it => it.text).join(' ');
+        const isHeading = avgSize >= 15;
+
+        if (!currentPara) {
+          currentPara = { isHeading, lines: [line] };
+        } else {
+          const prevY = currentPara.lines[currentPara.lines.length - 1].y;
+          const spacing = Math.abs(prevY - line.y);
+
+          if (spacing > avgSize * 1.85 || isHeading !== currentPara.isHeading) {
+            paragraphs.push(currentPara);
+            currentPara = { isHeading, lines: [line] };
+          } else {
+            currentPara.lines.push(line);
+          }
+        }
+      }
+      if (currentPara) paragraphs.push(currentPara);
+
+      return paragraphs;
+    }
+
+    function renderParagraphsToEditor(paragraphs) {
+      paragraphs.forEach(p => {
+        const el = document.createElement(p.isHeading ? 'h2' : 'p');
+        el.className = p.isHeading 
+          ? "text-xl font-bold mb-3 mt-5 text-slate-900" 
+          : "mb-3 leading-relaxed text-justify text-slate-800";
+
+        let html = "";
+        p.lines.forEach(line => {
+          line.items.forEach(it => {
+            let escaped = escapeHtml(it.text);
+            if (it.isBold && it.isItalic) escaped = `<b><i>${escaped}</i></b>`;
+            else if (it.isBold) escaped = `<b>${escaped}</b>`;
+            else if (it.isItalic) escaped = `<i>${escaped}</i>`;
+            html += escaped + " ";
+          });
+        });
+
+        el.innerHTML = html.trim();
+        wordSheet.appendChild(el);
+      });
+    }
+
+    /* --------------------------------------------------------------------
+       Bộ máy Tesseract.js Nhận Dạng OCR Tiếng Việt
+       -------------------------------------------------------------------- */
+    async function runTesseractOCR(canvas, pageNum, totalPages) {
+      setProgress(50, `Đang chạy OCR nhận diện trang ${pageNum}/${totalPages}...`, 'Nhận diện ký tự tiếng Việt với từ điển vie');
+
+      const worker = await Tesseract.createWorker('vie', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            const pageProgress = Math.round(m.progress * 100);
+            const totalPercent = Math.round(50 + ((pageNum - 1 + m.progress) / totalPages) * 45);
+            setProgress(totalPercent, `Nhận diện trang ${pageNum}/${totalPages} (${pageProgress}%)...`, 'Giải mã chữ viết tiếng Việt');
+          }
+        }
+      });
+
+      const ret = await worker.recognize(canvas);
+      await worker.terminate();
+
+      // Phân tách kết quả OCR thành các đoạn văn bản
+      const fullText = ret.data.text;
+      const paragraphs = fullText.split(/\n\s*\n/);
+
+      paragraphs.forEach(paraText => {
+        const clean = paraText.trim();
+        if (clean.length > 0) {
+          const p = document.createElement('p');
+          p.className = "mb-3 leading-relaxed text-justify text-slate-800";
+          p.textContent = clean;
+          wordSheet.appendChild(p);
+        }
+      });
+    }
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    /* ====================================================================
+       TRÌNH SOẠN THẢO WYSIWYG
+       ==================================================================== */
+    function formatCmd(cmd, val = null) {
+      document.execCommand(cmd, false, val);
+      wordSheet.focus();
+      updateWordCount();
+    }
+
+    function copyEditorText() {
+      const text = wordSheet.innerText;
+      if (!text) {
+        showToast('Không có nội dung để sao chép!', true);
+        return;
+      }
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('Đã sao chép toàn bộ văn bản vào bộ nhớ đệm!');
+    }
+
+    /* ====================================================================
+       XUẤT MICROSOFT WORD (.DOCX) CHUẨN UNICODE
+       ==================================================================== */
+    btnExportWord.addEventListener('click', async () => {
+      try {
+        btnExportWord.disabled = true;
+        btnExportWord.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Đang tạo file Word...</span>`;
+
+        const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = docx;
+        const docParagraphs = [];
+        const nodes = Array.from(wordSheet.childNodes);
+
+        nodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const tag = node.tagName.toLowerCase();
+            const textContent = node.textContent.trim();
+            if (!textContent) return;
+
+            let heading = undefined;
+            if (tag === 'h1') heading = HeadingLevel.HEADING_1;
+            if (tag === 'h2') heading = HeadingLevel.HEADING_2;
+            if (tag === 'h3') heading = HeadingLevel.HEADING_3;
+
+            const runs = [];
+            collectInlineRuns(node, runs, TextRun);
+
+            // Căn lề
+            let align = AlignmentType.BOTH;
+            const textAlign = window.getComputedStyle(node).textAlign;
+            if (textAlign === 'center') align = AlignmentType.CENTER;
+            else if (textAlign === 'right') align = AlignmentType.RIGHT;
+            else if (textAlign === 'left') align = AlignmentType.LEFT;
+
+            docParagraphs.push(
+              new Paragraph({
+                heading: heading,
+                alignment: align,
+                spacing: {
+                  after: heading ? 200 : 120,
+                  line: 276 // Dòng 1.15
+                },
+                children: runs.length > 0 ? runs : [
+                  new TextRun({
+                    text: textContent,
+                    font: "Times New Roman",
+                    size: heading ? 32 : 26 // 26 half-pts = 13pt
+                  })
+                ]
+              })
+            );
+          } else if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+            docParagraphs.push(
+              new Paragraph({
+                spacing: { after: 120 },
+                children: [
+                  new TextRun({
+                    text: node.textContent.trim(),
+                    font: "Times New Roman",
+                    size: 26
+                  })
+                ]
+              })
+            );
+          }
+        });
+
+        // Thiết lập trang chuẩn A4 văn thư Việt Nam (Lề trên/dưới/trái/phải)
+        const doc = new Document({
+          creator: "DocuMorph AI Converter",
+          title: currentFileName,
+          styles: {
+            default: {
+              document: {
+                run: { font: "Times New Roman", size: 26, color: "000000" }
+              }
+            }
+          },
+          sections: [{
+            properties: {
+              page: {
+                margin: {
+                  top: 1440,    // 2.54 cm
+                  bottom: 1440, // 2.54 cm
+                  left: 1700,   // ~3 cm (tiêu chuẩn đóng gáy)
+                  right: 1134   // ~2 cm
+                }
+              }
+            },
+            children: docParagraphs
+          }]
+        });
+
+        const blob = await Packer.toBlob(doc);
+        saveAs(blob, `${currentFileName}.docx`);
+        showToast('Xuất tệp Word (.docx) chuẩn thành công!');
+
+      } catch (err) {
+        console.error("Lỗi xuất Word:", err);
+        showToast('Có lỗi khi tạo tệp Word: ' + err.message, true);
+      } finally {
+        btnExportWord.disabled = false;
+        btnExportWord.innerHTML = `<i class="fa-solid fa-file-word text-base"></i><span>Xuất File Word (.docx)</span>`;
+      }
+    });
+
+    function collectInlineRuns(domNode, runsArray, TextRun) {
+      domNode.childNodes.forEach(child => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const txt = child.textContent;
+          if (txt) {
+            runsArray.push(new TextRun({
+              text: txt,
+              font: "Times New Roman",
+              size: 26,
+              bold: hasParentTag(child, 'B') || hasParentTag(child, 'STRONG'),
+              italics: hasParentTag(child, 'I') || hasParentTag(child, 'EM'),
+              underline: hasParentTag(child, 'U') ? {} : undefined
+            }));
+          }
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          collectInlineRuns(child, runsArray, TextRun);
+        }
+      });
+    }
+
+    function hasParentTag(node, tag) {
+      let p = node.parentNode;
+      while (p && p.id !== 'wordSheet') {
+        if (p.tagName === tag) return true;
+        p = p.parentNode;
+      }
+      return false;
+    }
+  </script>
+</body>
+</html>

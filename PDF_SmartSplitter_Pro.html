@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Công Cụ Tách & Đặt Tên File PDF Tự Động</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- pdf-lib CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <!-- JSZip CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-xl shadow-md shadow-indigo-200">
+          <i class="fa-solid fa-file-pdf"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-slate-900 leading-tight">PDF SmartSplitter Pro</h1>
+          <p class="text-xs text-slate-500">Tách file PDF & đặt tên quy chuẩn tự động</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <i class="fa-solid fa-shield-halved text-emerald-600"></i>
+          100% Client-side (Không tải file lên server)
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- CỘT TRÁI: TẢI FILE & CẤU HÌNH (5 Cols) -->
+      <div class="lg:col-span-5 space-y-6">
+
+        <!-- 1. Vùng Tải File -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
+            <i class="fa-solid fa-cloud-arrow-up text-indigo-600"></i>
+            1. Chọn file PDF nguồn
+          </h2>
+          
+          <div id="dropZone" class="border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-xl p-6 text-center cursor-pointer transition-all bg-slate-50/50 hover:bg-indigo-50/20 group">
+            <input type="file" id="pdfFileInput" accept="application/pdf" class="hidden">
+            <div id="uploadPrompt" class="space-y-2">
+              <div class="w-12 h-12 mx-auto rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                <i class="fa-solid fa-folder-open"></i>
+              </div>
+              <p class="text-sm font-medium text-slate-700">Kéo thả file PDF vào đây hoặc <span class="text-indigo-600 underline">bấm để chọn</span></p>
+              <p class="text-xs text-slate-400">Hỗ trợ các file hồ sơ, văn bản, sách scan (.pdf)</p>
+            </div>
+
+            <!-- Thông tin file đã chọn -->
+            <div id="fileInfoBox" class="hidden text-left space-y-2">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <i class="fa-regular fa-file-pdf text-red-500 text-2xl flex-shrink-0"></i>
+                  <div class="truncate">
+                    <p id="loadedFileName" class="text-sm font-semibold text-slate-800 truncate"></p>
+                    <p id="loadedFileSize" class="text-xs text-slate-400"></p>
+                  </div>
+                </div>
+                <button type="button" id="btnRemoveFile" class="text-slate-400 hover:text-red-500 text-sm p-1.5 rounded-lg hover:bg-red-50 transition" title="Xóa chọn lại">
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+              <div class="flex items-center justify-between text-xs text-slate-600 pt-1">
+                <span>Tổng số trang phát hiện:</span>
+                <span id="loadedTotalPages" class="font-bold text-indigo-600 text-sm px-2 py-0.5 bg-indigo-50 rounded">0 trang</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Bảng Điều Khiển Cấu Hình Tách & Đặt Tên -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-5">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+            <i class="fa-solid fa-sliders text-indigo-600"></i>
+            2. Cấu hình tách file
+          </h2>
+
+          <!-- Chọn chế độ tách -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-2">Phương thức chia trang:</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" id="modeFixedBtn" class="py-2 px-3 text-xs font-semibold rounded-lg border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-cubes-stacked"></i>
+                Cố định số trang
+              </button>
+              <button type="button" id="modeCustomBtn" class="py-2 px-3 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-shuffle"></i>
+                Phạm vi tùy biến
+              </button>
+            </div>
+          </div>
+
+          <!-- Nhóm cấu hình: Cố định -->
+          <div id="fixedModeConfig" class="space-y-2">
+            <label for="pagesPerFile" class="block text-xs font-medium text-slate-600">Số trang trên mỗi file PDF con:</label>
+            <div class="flex items-center gap-3">
+              <input type="number" id="pagesPerFile" min="1" value="2" class="w-24 px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-center font-bold">
+              <div class="flex gap-1.5">
+                <button type="button" onclick="setFixedPages(1)" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium">1 trang</button>
+                <button type="button" onclick="setFixedPages(2)" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium">2 trang</button>
+                <button type="button" onclick="setFixedPages(3)" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium">3 trang</button>
+                <button type="button" onclick="setFixedPages(4)" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium">4 trang</button>
+              </div>
+            </div>
+            <p class="text-[11px] text-slate-400">Ví dụ: File 10 trang, mỗi file 2 trang sẽ tách thành 5 file con (1-2, 3-4,...)</p>
+          </div>
+
+          <!-- Nhóm cấu hình: Phạm vi tùy biến -->
+          <div id="customModeConfig" class="hidden space-y-2">
+            <label for="customRangesInput" class="block text-xs font-medium text-slate-600">Dải trang tùy chỉnh (phân cách bằng dấu phẩy):</label>
+            <input type="text" id="customRangesInput" placeholder="Ví dụ: 1-2, 3-5, 6-7, 8-10" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+            <p class="text-[11px] text-slate-400">Hỗ trợ trang đơn và khoảng: 1, 2-3, 5-8</p>
+          </div>
+
+          <hr class="border-slate-100">
+
+          <!-- 3. Quy tắc đặt tên file con -->
+          <div class="space-y-3">
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <i class="fa-solid fa-signature text-indigo-600"></i>
+              3. Quy tắc đặt tên file con
+            </h2>
+
+            <!-- Lựa chọn cách đặt tên -->
+            <div class="flex items-center gap-4 text-xs font-medium text-slate-600">
+              <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="nameType" value="pattern" checked class="text-indigo-600 focus:ring-indigo-500">
+                Theo mẫu biến (Format)
+              </label>
+              <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="nameType" value="list" class="text-indigo-600 focus:ring-indigo-500">
+                Danh sách tên từng dòng
+              </label>
+            </div>
+
+            <!-- Kiểu 1: Theo chuỗi định dạng (Pattern) -->
+            <div id="patternNameBox" class="space-y-3">
+              <div>
+                <label for="namingPattern" class="block text-xs font-medium text-slate-600 mb-1">Mẫu định dạng tên file:</label>
+                <div class="flex gap-2">
+                  <input type="text" id="namingPattern" value="{filename}_Phan_{index0}" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono">
+                  <span class="flex items-center text-xs text-slate-400 font-mono">.pdf</span>
+                </div>
+              </div>
+
+              <!-- Nút chèn biến nhanh -->
+              <div>
+                <p class="text-[11px] text-slate-500 mb-1.5 font-medium">Click để chèn biến placeholder:</p>
+                <div class="flex flex-wrap gap-1.5">
+                  <button type="button" onclick="insertTag('{filename}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{filename}</button>
+                  <button type="button" onclick="insertTag('{index}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{index}</button>
+                  <button type="button" onclick="insertTag('{index0}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{index0}</button>
+                  <button type="button" onclick="insertTag('{from_page}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{from_page}</button>
+                  <button type="button" onclick="insertTag('{to_page}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{to_page}</button>
+                  <button type="button" onclick="insertTag('{total_files}')" class="px-2 py-0.5 text-xs bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded border border-slate-200 transition font-mono">{total_files}</button>
+                </div>
+              </div>
+
+              <!-- Mẫu gợi ý (Presets) -->
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">Mẫu gợi ý sẵn:</label>
+                <select id="presetSelect" class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-700 bg-white focus:outline-none">
+                  <option value="">-- Chọn mẫu gợi ý --</option>
+                  <option value="{filename}_Phan_{index0}">{filename}_Phan_{index0} (Mặc định: Tên_Phan_01)</option>
+                  <option value="{filename}_Trang_{from_page}-{to_page}">{filename}_Trang_{from_page}-{to_page} (Kèm dải trang)</option>
+                  <option value="HoSo_{index0}_{from_page}-{to_page}">HoSo_{index0}_{from_page}-{to_page}</option>
+                  <option value="{filename}_{index}_tren_{total_files}">{filename}_{index}_tren_{total_files} (Kèm tổng số file)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Kiểu 2: Danh sách tên nhập tay từng dòng -->
+            <div id="listNameBox" class="hidden space-y-2">
+              <label for="customNameList" class="block text-xs font-medium text-slate-600">
+                Nhập danh sách tên theo dòng (mỗi file 1 dòng):
+              </label>
+              <textarea id="customNameList" rows="5" placeholder="CCCD_0123456789&#10;CCCD_0987654321&#10;GiayPhepKinhDoanh_A&#10;SoThua_102" class="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none leading-relaxed"></textarea>
+              <p class="text-[11px] text-slate-400">Nếu số dòng ít hơn số file con, phần còn lại sẽ tự động bổ sung số thứ tự.</p>
+            </div>
+          </div>
+
+          <!-- Nút hành động chính -->
+          <div class="pt-2">
+            <button type="button" id="btnExecuteSplit" disabled class="w-full py-3 px-4 rounded-xl font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2">
+              <i class="fa-solid fa-scissors"></i>
+              Bắt Đầu Tách File PDF
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- CỘT PHẢI: PREVIEW & KẾT QUẢ XUẤT (7 Cols) -->
+      <div class="lg:col-span-7 space-y-6">
+
+        <!-- Card Bảng Danh Sách File Dự Kiến -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-full min-h-[550px]">
+          
+          <!-- Header Card -->
+          <div class="p-5 border-b border-slate-100 flex items-center justify-between flex-wrap gap-3">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm">
+                <i class="fa-solid fa-list-check"></i>
+              </div>
+              <div>
+                <h3 class="text-sm font-bold text-slate-800">Danh Sách File Con Dự Kiến</h3>
+                <p id="splitSummaryText" class="text-xs text-slate-500">Chưa có file nào được tải lên</p>
+              </div>
+            </div>
+
+            <!-- Nút Tải Toàn Bộ Zip -->
+            <div id="zipDownloadArea" class="hidden">
+              <button type="button" id="btnDownloadZip" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition flex items-center gap-2">
+                <i class="fa-solid fa-file-zipper"></i>
+                Tải Toàn Bộ (.ZIP)
+              </button>
+            </div>
+          </div>
+
+          <!-- Tiến trình Progress Bar -->
+          <div id="processingSection" class="hidden px-5 py-3 bg-slate-50 border-b border-slate-200">
+            <div class="flex items-center justify-between text-xs font-semibold text-slate-700 mb-1.5">
+              <span id="progressStatusText" class="flex items-center gap-2">
+                <i class="fa-solid fa-circle-notch fa-spin text-indigo-600"></i> Đang trích xuất trang và tạo file...
+              </span>
+              <span id="progressPercentage" class="text-indigo-600 font-bold">0%</span>
+            </div>
+            <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+              <div id="progressBarFill" class="bg-indigo-600 h-2 rounded-full transition-all duration-200" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Danh sách files -->
+          <div class="flex-1 overflow-y-auto max-h-[580px] p-5">
+            <!-- Trạng thái trống -->
+            <div id="emptyState" class="h-64 flex flex-col items-center justify-center text-slate-400 text-center">
+              <i class="fa-regular fa-file-lines text-5xl mb-3 text-slate-300"></i>
+              <p class="text-sm font-medium">Chưa có thông tin xem trước</p>
+              <p class="text-xs text-slate-400 mt-1">Hãy tải lên một file PDF nguồn để xem trước danh sách các file con sẽ được tạo.</p>
+            </div>
+
+            <!-- Bảng Preview -->
+            <div id="previewTableContainer" class="hidden overflow-x-auto">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr class="border-b border-slate-200 text-slate-500 bg-slate-50 font-semibold uppercase tracking-wider">
+                    <th class="py-2.5 px-3 w-12 text-center">STT</th>
+                    <th class="py-2.5 px-3">Tên file đích</th>
+                    <th class="py-2.5 px-3 w-28 text-center">Trang nguồn</th>
+                    <th class="py-2.5 px-3 w-20 text-center">Tổng trang</th>
+                    <th class="py-2.5 px-3 w-24 text-center">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody id="previewTableBody" class="divide-y divide-slate-100 font-normal">
+                  <!-- Render dynamic rows here -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Footer của Preview: Thống kê nhanh -->
+          <div class="p-3 bg-slate-50 rounded-b-2xl border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 px-5">
+            <span id="footerStats">Sẵn sàng xử lý</span>
+            <span>Bộ nhớ cache trình duyệt được giải phóng sau khi tải xong</span>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Toast Notification Box -->
+  <div id="toast" class="fixed bottom-5 right-5 max-w-sm px-4 py-3 rounded-xl shadow-lg border text-xs font-medium z-50 transform translate-y-10 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-2">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-base"></i>
+    <span id="toastMessage">Thông báo</span>
+  </div>
+
+  <script>
+    // Global state
+    let sourcePdfBytes = null;
+    let sourcePdfDoc = null;
+    let originalFileName = "";
+    let cleanBaseName = "";
+    let totalPdfPages = 0;
+    
+    // Split plans array: [{ index: 1, from: 1, to: 2, total: 2, filename: 'name.pdf', blob: Blob | null }]
+    let splitPlans = [];
+    let isProcessing = false;
+    let splitMode = 'fixed'; // 'fixed' | 'custom'
+
+    // DOM Elements
+    const dropZone = document.getElementById('dropZone');
+    const pdfFileInput = document.getElementById('pdfFileInput');
+    const uploadPrompt = document.getElementById('uploadPrompt');
+    const fileInfoBox = document.getElementById('fileInfoBox');
+    const loadedFileName = document.getElementById('loadedFileName');
+    const loadedFileSize = document.getElementById('loadedFileSize');
+    const loadedTotalPages = document.getElementById('loadedTotalPages');
+    const btnRemoveFile = document.getElementById('btnRemoveFile');
+
+    const modeFixedBtn = document.getElementById('modeFixedBtn');
+    const modeCustomBtn = document.getElementById('modeCustomBtn');
+    const fixedModeConfig = document.getElementById('fixedModeConfig');
+    const customModeConfig = document.getElementById('customModeConfig');
+    const pagesPerFile = document.getElementById('pagesPerFile');
+    const customRangesInput = document.getElementById('customRangesInput');
+
+    const namingPattern = document.getElementById('namingPattern');
+    const presetSelect = document.getElementById('presetSelect');
+    const customNameList = document.getElementById('customNameList');
+    const patternNameBox = document.getElementById('patternNameBox');
+    const listNameBox = document.getElementById('listNameBox');
+    const radioNameTypes = document.querySelectorAll('input[name="nameType"]');
+
+    const btnExecuteSplit = document.getElementById('btnExecuteSplit');
+    const previewTableContainer = document.getElementById('previewTableContainer');
+    const previewTableBody = document.getElementById('previewTableBody');
+    const emptyState = document.getElementById('emptyState');
+    const splitSummaryText = document.getElementById('splitSummaryText');
+    const footerStats = document.getElementById('footerStats');
+
+    const processingSection = document.getElementById('processingSection');
+    const progressBarFill = document.getElementById('progressBarFill');
+    const progressPercentage = document.getElementById('progressPercentage');
+    const progressStatusText = document.getElementById('progressStatusText');
+    const zipDownloadArea = document.getElementById('zipDownloadArea');
+    const btnDownloadZip = document.getElementById('btnDownloadZip');
+
+    // Toast helper
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const toastMessage = document.getElementById('toastMessage');
+      const toastIcon = document.getElementById('toastIcon');
+
+      toastMessage.textContent = message;
+      if (type === 'success') {
+        toast.className = "fixed bottom-5 right-5 max-w-sm px-4 py-3 rounded-xl shadow-lg border text-xs font-semibold z-50 transform translate-y-0 opacity-100 transition-all duration-300 bg-emerald-50 text-emerald-800 border-emerald-200 flex items-center gap-2";
+        toastIcon.className = "fa-solid fa-circle-check text-emerald-600 text-base";
+      } else if (type === 'error') {
+        toast.className = "fixed bottom-5 right-5 max-w-sm px-4 py-3 rounded-xl shadow-lg border text-xs font-semibold z-50 transform translate-y-0 opacity-100 transition-all duration-300 bg-red-50 text-red-800 border-red-200 flex items-center gap-2";
+        toastIcon.className = "fa-solid fa-circle-exclamation text-red-600 text-base";
+      } else {
+        toast.className = "fixed bottom-5 right-5 max-w-sm px-4 py-3 rounded-xl shadow-lg border text-xs font-semibold z-50 transform translate-y-0 opacity-100 transition-all duration-300 bg-indigo-50 text-indigo-800 border-indigo-200 flex items-center gap-2";
+        toastIcon.className = "fa-solid fa-circle-info text-indigo-600 text-base";
+      }
+
+      setTimeout(() => {
+        toast.classList.add('translate-y-10', 'opacity-0');
+      }, 3500);
+    }
+
+    // Format file size
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // Helper chèn tag
+    function insertTag(tag) {
+      const start = namingPattern.selectionStart;
+      const end = namingPattern.selectionEnd;
+      const text = namingPattern.value;
+      namingPattern.value = text.substring(0, start) + tag + text.substring(end);
+      namingPattern.focus();
+      namingPattern.selectionStart = namingPattern.selectionEnd = start + tag.length;
+      updatePreviewPlan();
+    }
+
+    function setFixedPages(num) {
+      pagesPerFile.value = num;
+      updatePreviewPlan();
+    }
+
+    // File Drag & Drop events
+    dropZone.addEventListener('click', () => pdfFileInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-indigo-600', 'bg-indigo-50/40');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-indigo-600', 'bg-indigo-50/40');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-indigo-600', 'bg-indigo-50/40');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFileSelection(e.dataTransfer.files[0]);
+      }
+    });
+    pdfFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleFileSelection(e.target.files[0]);
+      }
+    });
+
+    btnRemoveFile.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resetAll();
+    });
+
+    // Xử lý nạp file
+    async function handleFileSelection(file) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        showToast('Vui lòng chọn file có định dạng PDF hợp lệ!', 'error');
+        return;
+      }
+
+      originalFileName = file.name;
+      cleanBaseName = file.name.replace(/\.[^/.]+$/, "");
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        sourcePdfBytes = arrayBuffer;
+        
+        // Đọc pdf bằng pdf-lib để xác minh & lấy số trang
+        const pdfDoc = await PDFLib.PDFDocument.load(sourcePdfBytes, { ignoreEncryption: true });
+        totalPdfPages = pdfDoc.getPageCount();
+        sourcePdfDoc = pdfDoc;
+
+        // Cập nhật UI file đã chọn
+        uploadPrompt.classList.add('hidden');
+        fileInfoBox.classList.remove('hidden');
+        loadedFileName.textContent = originalFileName;
+        loadedFileSize.textContent = formatBytes(file.size);
+        loadedTotalPages.textContent = `${totalPdfPages} trang`;
+
+        // Kích hoạt nút thực hiện
+        btnExecuteSplit.disabled = false;
+        zipDownloadArea.classList.add('hidden');
+
+        showToast(`Đã nhận diện file PDF (${totalPdfPages} trang)`, 'success');
+        updatePreviewPlan();
+
+      } catch (err) {
+        console.error(err);
+        showToast('Không thể mở file PDF này. File có thể bị hỏng hoặc có mật khẩu.', 'error');
+        resetAll();
+      }
+    }
+
+    function resetAll() {
+      sourcePdfBytes = null;
+      sourcePdfDoc = null;
+      originalFileName = "";
+      cleanBaseName = "";
+      totalPdfPages = 0;
+      splitPlans = [];
+      pdfFileInput.value = '';
+
+      uploadPrompt.classList.remove('hidden');
+      fileInfoBox.classList.add('hidden');
+      btnExecuteSplit.disabled = true;
+
+      emptyState.classList.remove('hidden');
+      previewTableContainer.classList.add('hidden');
+      zipDownloadArea.classList.add('hidden');
+      processingSection.classList.add('hidden');
+      splitSummaryText.textContent = "Chưa có file nào được tải lên";
+      footerStats.textContent = "Sẵn sàng xử lý";
+    }
+
+    // Toggle Modes
+    modeFixedBtn.addEventListener('click', () => {
+      splitMode = 'fixed';
+      modeFixedBtn.className = "py-2 px-3 text-xs font-semibold rounded-lg border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition flex items-center justify-center gap-1.5";
+      modeCustomBtn.className = "py-2 px-3 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition flex items-center justify-center gap-1.5";
+      fixedModeConfig.classList.remove('hidden');
+      customModeConfig.classList.add('hidden');
+      updatePreviewPlan();
+    });
+
+    modeCustomBtn.addEventListener('click', () => {
+      splitMode = 'custom';
+      modeCustomBtn.className = "py-2 px-3 text-xs font-semibold rounded-lg border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition flex items-center justify-center gap-1.5";
+      modeFixedBtn.className = "py-2 px-3 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition flex items-center justify-center gap-1.5";
+      customModeConfig.classList.remove('hidden');
+      fixedModeConfig.classList.add('hidden');
+      if (!customRangesInput.value && totalPdfPages > 0) {
+        // Gợi ý mặc định
+        customRangesInput.value = totalPdfPages > 2 ? `1-2, 3-${totalPdfPages}` : `1-${totalPdfPages}`;
+      }
+      updatePreviewPlan();
+    });
+
+    // Toggle Tùy chọn đặt tên
+    radioNameTypes.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (e.target.value === 'pattern') {
+          patternNameBox.classList.remove('hidden');
+          listNameBox.classList.add('hidden');
+        } else {
+          patternNameBox.classList.add('hidden');
+          listNameBox.classList.remove('hidden');
+        }
+        updatePreviewPlan();
+      });
+    });
+
+    presetSelect.addEventListener('change', (e) => {
+      if (e.target.value) {
+        namingPattern.value = e.target.value;
+        updatePreviewPlan();
+      }
+    });
+
+    namingPattern.addEventListener('input', updatePreviewPlan);
+    pagesPerFile.addEventListener('input', updatePreviewPlan);
+    customRangesInput.addEventListener('input', updatePreviewPlan);
+    customNameList.addEventListener('input', updatePreviewPlan);
+
+    // Tính toán dải trang (Range Parser)
+    function parseCustomRanges(str, maxPages) {
+      const ranges = [];
+      if (!str || !str.trim()) return ranges;
+      const parts = str.split(',').map(s => s.trim()).filter(Boolean);
+
+      for (let part of parts) {
+        if (part.includes('-')) {
+          const [startStr, endStr] = part.split('-').map(s => s.trim());
+          const start = parseInt(startStr, 10);
+          const end = parseInt(endStr, 10);
+          if (!isNaN(start) && !isNaN(end) && start > 0 && end >= start) {
+            const validStart = Math.min(start, maxPages);
+            const validEnd = Math.min(end, maxPages);
+            ranges.push({ from: validStart, to: validEnd, count: (validEnd - validStart + 1) });
+          }
+        } else {
+          const page = parseInt(part, 10);
+          if (!isNaN(page) && page > 0 && page <= maxPages) {
+            ranges.push({ from: page, to: page, count: 1 });
+          }
+        }
+      }
+      return ranges;
+    }
+
+    // Sinh tên file theo quy chuẩn
+    function generateFileName(index, totalFiles, fromPage, toPage, customLines) {
+      const nameMode = document.querySelector('input[name="nameType"]:checked').value;
+      
+      if (nameMode === 'list') {
+        if (customLines && customLines[index - 1] && customLines[index - 1].trim().length > 0) {
+          let customName = customLines[index - 1].trim();
+          if (!customName.toLowerCase().endsWith('.pdf')) {
+            customName += '.pdf';
+          }
+          return customName;
+        }
+      }
+
+      // Pattern format
+      let pattern = namingPattern.value.trim();
+      if (!pattern) pattern = "{filename}_Phan_{index0}";
+
+      const index0 = String(index).padStart(totalFiles >= 100 ? 3 : 2, '0');
+      let result = pattern
+        .replaceAll('{filename}', cleanBaseName)
+        .replaceAll('{index}', index)
+        .replaceAll('{index0}', index0)
+        .replaceAll('{from_page}', fromPage)
+        .replaceAll('{to_page}', toPage)
+        .replaceAll('{total_files}', totalFiles);
+
+      // Clean invalid characters in file names
+      result = result.replace(/[/\\?%*:|"<>]/g, '_');
+      if (!result.toLowerCase().endsWith('.pdf')) {
+        result += '.pdf';
+      }
+      return result;
+    }
+
+    // Cập nhật danh sách kế hoạch phân tách (Preview)
+    function updatePreviewPlan() {
+      if (!sourcePdfDoc || totalPdfPages <= 0) return;
+
+      let ranges = [];
+
+      if (splitMode === 'fixed') {
+        const step = Math.max(1, parseInt(pagesPerFile.value, 10) || 1);
+        for (let i = 1; i <= totalPdfPages; i += step) {
+          const from = i;
+          const to = Math.min(i + step - 1, totalPdfPages);
+          ranges.push({ from, to, count: (to - from + 1) });
+        }
+      } else {
+        ranges = parseCustomRanges(customRangesInput.value, totalPdfPages);
+      }
+
+      const totalFiles = ranges.length;
+      const customLines = customNameList.value.split('\n');
+
+      splitPlans = ranges.map((r, i) => {
+        const index = i + 1;
+        const targetName = generateFileName(index, totalFiles, r.from, r.to, customLines);
+        return {
+          index,
+          from: r.from,
+          to: r.to,
+          total: r.count,
+          filename: targetName,
+          blob: null // Sẽ được cập nhật sau khi bấm tách
+        };
+      });
+
+      renderPreviewTable();
+    }
+
+    // Render bảng Preview
+    function renderPreviewTable() {
+      if (splitPlans.length === 0) {
+        emptyState.classList.remove('hidden');
+        previewTableContainer.classList.add('hidden');
+        splitSummaryText.textContent = "Không tìm thấy dải trang hợp lệ";
+        btnExecuteSplit.disabled = true;
+        return;
+      }
+
+      emptyState.classList.add('hidden');
+      previewTableContainer.classList.remove('hidden');
+      btnExecuteSplit.disabled = false;
+
+      splitSummaryText.textContent = `Dự kiến tách thành ${splitPlans.length} file PDF`;
+      footerStats.textContent = `Tổng cộng: ${splitPlans.length} file • ${totalPdfPages} trang gốc`;
+
+      previewTableBody.innerHTML = '';
+      splitPlans.forEach((plan) => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 transition border-b border-slate-100";
+        
+        tr.innerHTML = `
+          <td class="py-2.5 px-3 text-center text-slate-400 font-mono text-[11px]">${plan.index}</td>
+          <td class="py-2.5 px-3">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-file-pdf text-indigo-500"></i>
+              <span class="font-medium text-slate-800 break-all">${escapeHtml(plan.filename)}</span>
+            </div>
+          </td>
+          <td class="py-2.5 px-3 text-center font-mono">Trang ${plan.from} - ${plan.to}</td>
+          <td class="py-2.5 px-3 text-center">
+            <span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700">${plan.total} trang</span>
+          </td>
+          <td class="py-2.5 px-3 text-center">
+            <button type="button" id="btnDownloadRow_${plan.index}" disabled 
+              class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 text-slate-400 cursor-not-allowed transition flex items-center justify-center gap-1 mx-auto hover:bg-indigo-50 hover:text-indigo-600 disabled:hover:bg-slate-100 disabled:hover:text-slate-400"
+              onclick="downloadSingleFile(${plan.index})">
+              <i class="fa-solid fa-download"></i>
+              Tải
+            </button>
+          </td>
+        `;
+        previewTableBody.appendChild(tr);
+      });
+    }
+
+    function escapeHtml(text) {
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // TẢI 1 FILE ĐƠN LẺ
+    window.downloadSingleFile = function(index) {
+      const plan = splitPlans.find(p => p.index === index);
+      if (!plan || !plan.blob) {
+        showToast('Vui lòng bấm "Bắt Đầu Tách File PDF" trước khi tải!', 'error');
+        return;
+      }
+      triggerDownload(plan.blob, plan.filename);
+    };
+
+    function triggerDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // TIẾN HÀNH TÁCH FILE BẰNG PDF-LIB
+    btnExecuteSplit.addEventListener('click', async () => {
+      if (isProcessing) return;
+      if (!sourcePdfBytes || splitPlans.length === 0) {
+        showToast('Chưa có thông tin phân tách hợp lệ!', 'error');
+        return;
+      }
+
+      isProcessing = true;
+      btnExecuteSplit.disabled = true;
+      btnExecuteSplit.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Đang Xử Lý...`;
+      processingSection.classList.remove('hidden');
+      zipDownloadArea.classList.add('hidden');
+
+      try {
+        const total = splitPlans.length;
+        
+        for (let i = 0; i < total; i++) {
+          const plan = splitPlans[i];
+          progressStatusText.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin text-indigo-600"></i> Đang trích xuất file ${i + 1}/${total}: <span class="font-bold text-slate-800">${escapeHtml(plan.filename)}</span>`;
+          
+          // Tạo 1 tài liệu pdf-lib mới cho file con
+          const subPdfDoc = await PDFLib.PDFDocument.create();
+
+          // Tính các index trang (0-based)
+          const pageIndexes = [];
+          for (let p = plan.from; p <= plan.to; p++) {
+            pageIndexes.push(p - 1);
+          }
+
+          // Sao chép các trang từ PDF nguồn vào sub PDF
+          const copiedPages = await subPdfDoc.copyPages(sourcePdfDoc, pageIndexes);
+          copiedPages.forEach(copiedPage => subPdfDoc.addPage(copiedPage));
+
+          // Lưu bytes thành Blob
+          const subPdfBytes = await subPdfDoc.save();
+          plan.blob = new Blob([subPdfBytes], { type: 'application/pdf' });
+
+          // Cập nhật trạng thái nút download của từng hàng
+          const rowBtn = document.getElementById(`btnDownloadRow_${plan.index}`);
+          if (rowBtn) {
+            rowBtn.disabled = false;
+            rowBtn.classList.remove('bg-slate-100', 'text-slate-400', 'cursor-not-allowed');
+            rowBtn.classList.add('bg-indigo-50', 'text-indigo-600', 'hover:bg-indigo-600', 'hover:text-white', 'cursor-pointer');
+          }
+
+          // Cập nhật thanh tiến trình
+          const percent = Math.round(((i + 1) / total) * 100);
+          progressBarFill.style.width = percent + '%';
+          progressPercentage.textContent = percent + '%';
+        }
+
+        // Hoàn thành
+        progressStatusText.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600"></i> Đã hoàn thành tách ${total} file PDF thành công!`;
+        zipDownloadArea.classList.remove('hidden');
+        showToast(`Đã tách thành công ${total} file! Bạn có thể tải lẻ hoặc tải file ZIP.`, 'success');
+
+      } catch (err) {
+        console.error(err);
+        showToast('Có lỗi xảy ra trong quá trình chia tách PDF: ' + err.message, 'error');
+        progressStatusText.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-red-500"></i> Xử lý thất bại!`;
+      } finally {
+        isProcessing = false;
+        btnExecuteSplit.disabled = false;
+        btnExecuteSplit.innerHTML = `<i class="fa-solid fa-scissors"></i> Bắt Đầu Tách File PDF`;
+      }
+    });
+
+    // TẢI TOÀN BỘ FILE BẰNG JSZIP
+    btnDownloadZip.addEventListener('click', async () => {
+      if (splitPlans.length === 0 || !splitPlans[0].blob) {
+        showToast('Chưa có dữ liệu file để đóng gói ZIP!', 'error');
+        return;
+      }
+
+      btnDownloadZip.disabled = true;
+      btnDownloadZip.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Đang nén ZIP...`;
+
+      try {
+        const zip = new JSZip();
+        const zipFolderName = cleanBaseName ? `${cleanBaseName}_TachFile` : "PDF_Split";
+        const folder = zip.folder(zipFolderName);
+
+        splitPlans.forEach((plan) => {
+          if (plan.blob) {
+            folder.file(plan.filename, plan.blob);
+          }
+        });
+
+        const zipBlob = await zip.generateAsync({
+          type: "blob",
+          compression: "DEFLATE",
+          compressionOptions: { level: 6 }
+        });
+
+        triggerDownload(zipBlob, `${zipFolderName}.zip`);
+        showToast('Đã tải xuống file nén ZIP thành công!', 'success');
+
+      } catch (err) {
+        console.error(err);
+        showToast('Lỗi khi nén file zip: ' + err.message, 'error');
+      } finally {
+        btnDownloadZip.disabled = false;
+        btnDownloadZip.innerHTML = `<i class="fa-solid fa-file-zipper"></i> Tải Toàn Bộ (.ZIP)`;
+      }
+    });
+  </script>
+</body>
+</html>

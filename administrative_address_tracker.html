@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hệ Thống Tra Cứu Biến Động & Chuẩn Hóa Địa Giới Hành Chính</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- FontAwesome Icons 6 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Tùy chỉnh thanh cuộn */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    /* Timeline node styling */
+    .timeline-line::before {
+      content: '';
+      position: absolute;
+      left: 19px;
+      top: 16px;
+      bottom: 0;
+      width: 2px;
+      background: #e2e8f0;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans">
+
+  <!-- Navigation Bar -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-700 flex items-center justify-center text-white shadow-md shadow-brand-500/20 text-lg">
+          <i class="fa-solid fa-map-location-dot"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="font-bold text-base sm:text-lg text-slate-900 tracking-tight leading-none">GeoTimeline VN</h1>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-brand-50 text-brand-700 rounded-full border border-brand-200">v2.0 Pro</span>
+          </div>
+          <p class="text-xs text-slate-500 font-medium">Hệ thống Tra cứu Biến động & Chuẩn hóa Địa giới Hành chính</p>
+        </div>
+      </div>
+
+      <!-- Tab điều hướng -->
+      <nav class="flex space-x-1 sm:space-x-2 bg-slate-100 p-1 rounded-xl text-xs sm:text-sm font-semibold">
+        <button id="tabBtnSearch" onclick="switchTab('search')" class="px-3 sm:px-4 py-2 rounded-lg bg-white text-brand-700 shadow-xs transition flex items-center space-x-1.5">
+          <i class="fa-solid fa-magnifying-glass-location"></i>
+          <span>Tra cứu Địa chỉ</span>
+        </button>
+        <button id="tabBtnConfig" onclick="switchTab('config')" class="px-3 sm:px-4 py-2 rounded-lg text-slate-600 hover:text-slate-900 transition flex items-center space-x-1.5">
+          <i class="fa-solid fa-database"></i>
+          <span>Cơ sở Dữ liệu (<span id="eventCountBadge">0</span>)</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Thông báo trạng thái Toast -->
+  <div id="toastBox" class="fixed top-20 right-4 sm:right-6 z-50 transform translate-x-full opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 text-white text-sm px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 border border-slate-700">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+    <span id="toastMsg" class="font-medium">Thông báo</span>
+  </div>
+
+  <!-- NỘI DUNG CHÍNH -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+
+    <!-- ================================================================= -->
+    <!-- PHÂN HỆ 1: TRA CỨU & SUY DIỄN THÔNG MINH                          -->
+    <!-- ================================================================= -->
+    <div id="panelSearch" class="space-y-6">
+      
+      <!-- Hộp Tìm kiếm & Bộ Lọc Thời Gian -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+          <div>
+            <h2 class="text-lg font-bold text-slate-900 flex items-center space-x-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-brand-600 inline-block"></span>
+              <span>Truy vấn Biến động Địa chỉ theo Thời điểm</span>
+            </h2>
+            <p class="text-xs text-slate-500 mt-0.5">Nhập địa chỉ cũ ghi trên văn bản/GCN/CCCD cũ và thời điểm phát sinh để truy vết địa chỉ hiện tại</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-slate-500 hidden sm:inline">Thử mẫu nhanh:</span>
+            <button onclick="fillSample('Định An, Trà Cú, Trà Vinh', '1995')" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition">Định An 1995</button>
+            <button onclick="fillSample('Xã An Thạnh, Bến Cát, Bình Dương', '2012')" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition">Bến Cát 2012</button>
+            <button onclick="fillSample('Phường An Phú Đông, Huyện Hóc Môn, TP.HCM', '1996')" class="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition">Hóc Môn 1996</button>
+          </div>
+        </div>
+
+        <form id="searchForm" onsubmit="handleSearch(event)" class="mt-5 space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-4">
+            <!-- Nhập chuỗi địa chỉ tự do -->
+            <div class="md:col-span-8">
+              <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                <i class="fa-solid fa-location-dot text-brand-600 mr-1"></i> Địa chỉ cũ cần tra cứu
+              </label>
+              <div class="relative">
+                <input type="text" id="inputOldAddress" required placeholder="Ví dụ: Ấp Chợ, Xã Định An, Huyện Trà Cú, Tỉnh Trà Vinh"
+                  class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-200 text-sm text-slate-900 transition outline-none shadow-2xs font-medium">
+                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <i class="fa-regular fa-compass"></i>
+                </div>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Gõ địa chỉ tự do từ Ấp/Thôn/Xóm đến Xã/Huyện/Tỉnh hoặc chọn bộ lọc chi tiết bên dưới.</p>
+            </div>
+
+            <!-- Thời điểm của địa chỉ cũ -->
+            <div class="md:col-span-4">
+              <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                <i class="fa-regular fa-calendar-clock text-brand-600 mr-1"></i> Thời điểm ghi nhận địa chỉ
+              </label>
+              <div class="grid grid-cols-2 gap-2">
+                <input type="number" id="inputOldYear" min="1945" max="2035" placeholder="Năm (VD: 2005)" value="2005" required
+                  class="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-200 text-sm text-slate-900 transition outline-none font-medium shadow-2xs">
+                
+                <input type="date" id="inputOldExactDate" title="Tùy chọn: Ngày tháng cụ thể"
+                  class="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-200 text-xs text-slate-700 transition outline-none font-medium shadow-2xs">
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Ưu tiên nhập năm hoặc chọn ngày cụ thể ghi trên giấy tờ.</p>
+            </div>
+          </div>
+
+          <!-- Bộ lọc phân tầng tùy chọn (Accordion mở rộng) -->
+          <div class="pt-2">
+            <button type="button" onclick="toggleDetailedInputs()" class="text-xs font-semibold text-brand-600 hover:text-brand-800 flex items-center space-x-1 transition">
+              <span id="detailedFilterToggleText"><i class="fa-solid fa-sliders mr-1"></i> Nhập chi tiết theo từng cấp hành chính (Tùy chọn nâng cao)</span>
+              <i id="detailedFilterIcon" class="fa-solid fa-chevron-down text-[10px] ml-1 transition-transform"></i>
+            </button>
+
+            <div id="detailedInputsContainer" class="hidden mt-3 p-4 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Cấp Tỉnh / TP cũ</label>
+                <input type="text" id="subProvince" placeholder="VD: Trà Vinh, Cửu Long, Hà Tây..." class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Cấp Huyện / TX cũ</label>
+                <input type="text" id="subDistrict" placeholder="VD: Trà Cú, Bến Cát, Hoài Đức..." class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Cấp Xã / Phường cũ</label>
+                <input type="text" id="subCommune" placeholder="VD: Định An, Mỹ Thạnh Tây..." class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Cấp Ấp / Khóm / Thôn cũ</label>
+                <input type="text" id="subHamlet" placeholder="VD: Ấp Chợ, Khóm 1..." class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">
+              </div>
+            </div>
+          </div>
+
+          <div class="flex justify-end pt-2">
+            <button type="submit" class="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-700 hover:to-indigo-700 text-white font-semibold rounded-xl text-sm shadow-md shadow-brand-500/20 transition flex items-center justify-center space-x-2">
+              <i class="fa-solid fa-bolt-lightning text-amber-300"></i>
+              <span>Phân Tích & Truy Vết Địa Chỉ Hiện Tại</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- KẾT QUẢ TRUY VẾT & SO SÁNH -->
+      <div id="resultContainer" class="hidden space-y-6">
+        
+        <!-- Thẻ Kết quả Chuẩn hóa Hiện Tại -->
+        <div class="bg-gradient-to-br from-indigo-900 via-brand-900 to-slate-900 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden">
+          <div class="absolute -right-8 -bottom-8 w-48 h-48 bg-brand-500/10 rounded-full blur-2xl pointer-events-none"></div>
+
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-indigo-800/60">
+            <div class="flex items-center space-x-2 text-indigo-300 text-xs font-semibold uppercase tracking-wider">
+              <i class="fa-solid fa-flag-checkered text-amber-400"></i>
+              <span>Kết quả chuẩn hóa Địa chỉ Hành chính Hiện tại</span>
+            </div>
+            <div id="resultStatusTag" class="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 w-fit">
+              Đã tìm thấy lộ trình biến động
+            </div>
+          </div>
+
+          <div class="mt-5 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            <!-- Địa chỉ cũ lúc đó -->
+            <div class="lg:col-span-5 bg-white/5 rounded-xl p-4 border border-white/10 backdrop-blur-xs">
+              <span class="text-xs text-indigo-200 block font-medium mb-1">
+                <i class="fa-solid fa-clock-rotate-left mr-1"></i> Địa chỉ tại thời điểm <b id="resOldTimestamp" class="text-white">Năm 2005</b>:
+              </span>
+              <p id="resOldAddressText" class="text-base sm:text-lg font-semibold text-slate-100">Xã Định An, Huyện Trà Cú, Tỉnh Trà Vinh</p>
+            </div>
+
+            <!-- Mũi tên chuyển giao -->
+            <div class="lg:col-span-2 flex flex-col items-center justify-center text-indigo-300 py-1 lg:py-0">
+              <div class="w-10 h-10 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-amber-300 text-base shadow-sm">
+                <i class="fa-solid fa-arrow-right hidden lg:inline"></i>
+                <i class="fa-solid fa-arrow-down lg:hidden"></i>
+              </div>
+              <span id="resStepCount" class="text-[11px] text-indigo-200 font-semibold mt-1">Trải qua 2 lần biến động</span>
+            </div>
+
+            <!-- Địa chỉ mới chuẩn hóa hiện nay -->
+            <div class="lg:col-span-5 bg-emerald-500/10 rounded-xl p-4 border border-emerald-500/30 backdrop-blur-xs">
+              <span class="text-xs text-emerald-300 block font-bold mb-1">
+                <i class="fa-solid fa-circle-check text-emerald-400 mr-1"></i> Địa chỉ mới hiện tại (Áp dụng hôm nay):
+              </span>
+              <p id="resNewAddressText" class="text-lg sm:text-xl font-bold text-emerald-300 leading-snug">Thị trấn Định An, Huyện Trà Cú, Tỉnh Trà Vinh</p>
+              <div class="mt-2 flex items-center justify-between text-xs text-emerald-200/80">
+                <span id="resEffectiveDate">Hiệu lực gần nhất: 2008</span>
+                <button onclick="copyCurrentAddress()" class="px-2 py-0.5 rounded bg-emerald-600/30 hover:bg-emerald-600/50 text-white text-[11px] font-medium transition flex items-center space-x-1">
+                  <i class="fa-regular fa-copy"></i>
+                  <span>Sao chép</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sơ đồ Dòng Thời Gian (Timeline of Changes) -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+          <div class="flex items-center justify-between mb-6 pb-3 border-b border-slate-100">
+            <div>
+              <h3 class="text-base font-bold text-slate-900 flex items-center space-x-2">
+                <i class="fa-solid fa-timeline text-brand-600"></i>
+                <span>Sơ đồ Dòng Thời Gian Lịch Sử Biến Động</span>
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">Chi tiết từng mốc chia tách, sáp nhập và căn cứ pháp lý liên quan</p>
+            </div>
+            <span class="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-semibold">
+              <i class="fa-solid fa-scale-balanced mr-1"></i> Chuẩn pháp lý
+            </span>
+          </div>
+
+          <!-- Danh sách Node Timeline -->
+          <div id="timelineContainer" class="relative timeline-line space-y-6 pl-2">
+            <!-- Sẽ được render động bằng JavaScript -->
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- PHÂN HỆ 2: CƠ SỞ DỮ LIỆU & QUẢN TRỊ CẤU HÌNH BIẾN ĐỘNG            -->
+    <!-- ================================================================= -->
+    <div id="panelConfig" class="hidden space-y-6">
+      
+      <!-- Thanh công cụ Dữ liệu: Thêm sự kiện, Nhập/Xuất File -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900 flex items-center space-x-2">
+            <i class="fa-solid fa-database text-brand-600"></i>
+            <span>Cơ Sở Dữ Liệu Biến Động Địa Giới</span>
+          </h2>
+          <p class="text-xs text-slate-500 mt-0.5">Thêm mới, sửa đổi hoặc nạp/xuất kho dữ liệu lịch sử sáp nhập & chia tách (lưu trữ 100% trong trình duyệt)</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Nút thêm sự kiện mới -->
+          <button onclick="openModalAddEvent()" class="px-3.5 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center space-x-1.5">
+            <i class="fa-solid fa-plus"></i>
+            <span>Thêm Sự Kiện Biến Động</span>
+          </button>
+
+          <!-- Xuất JSON/CSV -->
+          <div class="relative group">
+            <button class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition flex items-center space-x-1.5">
+              <i class="fa-solid fa-file-export"></i>
+              <span>Xuất Tệp</span>
+              <i class="fa-solid fa-chevron-down text-[10px]"></i>
+            </button>
+            <div class="absolute right-0 mt-1 w-36 bg-white border border-slate-200 rounded-xl shadow-lg hidden group-hover:block z-20 py-1 text-xs">
+              <button onclick="exportDataJSON()" class="w-full text-left px-3 py-2 hover:bg-slate-50 font-medium text-slate-700 flex items-center space-x-2">
+                <i class="fa-regular fa-file-code text-brand-600"></i>
+                <span>Tệp JSON</span>
+              </button>
+              <button onclick="exportDataCSV()" class="w-full text-left px-3 py-2 hover:bg-slate-50 font-medium text-slate-700 flex items-center space-x-2">
+                <i class="fa-solid fa-file-csv text-emerald-600"></i>
+                <span>Tệp Excel / CSV</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Nạp JSON/CSV -->
+          <label class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center space-x-1.5">
+            <i class="fa-solid fa-file-import"></i>
+            <span>Nạp Tệp</span>
+            <input type="file" id="importFileInput" accept=".json,.csv" class="hidden" onchange="importDataFile(event)">
+          </label>
+
+          <!-- Nút Khôi phục mặc định -->
+          <button onclick="resetDefaultDatabase()" title="Khôi phục dữ liệu mẫu ban đầu" class="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition">
+            <i class="fa-solid fa-arrow-rotate-left"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Bộ lọc và Bảng dữ liệu sự kiện -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="p-4 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row gap-3 justify-between items-center">
+          <div class="w-full sm:w-72 relative">
+            <input type="text" id="dbSearchInput" onkeyup="filterDatabaseTable()" placeholder="Tìm kiếm tên cũ, tên mới, văn bản..."
+              class="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:border-brand-500 outline-none">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+          </div>
+
+          <div class="flex items-center space-x-2 text-xs">
+            <span class="text-slate-500 font-medium">Lọc theo cấp:</span>
+            <select id="dbFilterLevel" onchange="filterDatabaseTable()" class="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 outline-none font-medium">
+              <option value="ALL">Tất cả các cấp</option>
+              <option value="PROVINCE">Tỉnh / Thành phố</option>
+              <option value="DISTRICT">Huyện / Quận / TX / TP</option>
+              <option value="COMMUNE">Xã / Phường / Thị trấn</option>
+              <option value="HAMLET">Ấp / Khóm / Thôn / Tổ</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Bảng danh sách sự kiện -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200">
+              <tr>
+                <th class="py-3 px-4">Cấp</th>
+                <th class="py-3 px-4">Tên Cũ Trước Biến Động</th>
+                <th class="py-3 px-4">Hình Thức</th>
+                <th class="py-3 px-4">Tên Mới Sau Biến Động</th>
+                <th class="py-3 px-4">Thời Điểm Hiệu Lực</th>
+                <th class="py-3 px-4">Căn Cứ Pháp Lý</th>
+                <th class="py-3 px-4 text-center">Thao Tác</th>
+              </tr>
+            </thead>
+            <tbody id="dbTableBody" class="divide-y divide-slate-200 font-medium text-slate-700">
+              <!-- Sẽ render bằng JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <div id="dbEmptyNotice" class="hidden p-8 text-center text-slate-400 text-xs font-medium">
+          Không tìm thấy bản ghi biến động địa giới nào phù hợp.
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ================================================================= -->
+  <!-- MODAL: THÊM / SỬA SỰ KIỆN BIẾN ĐỘNG                               -->
+  <!-- ================================================================= -->
+  <div id="eventModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      
+      <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <h3 id="modalTitle" class="text-sm sm:text-base font-bold text-slate-900 flex items-center space-x-2">
+          <i class="fa-solid fa-folder-plus text-brand-600"></i>
+          <span>Thêm Sự Kiện Biến Động Địa Giới Mới</span>
+        </h3>
+        <button onclick="closeModal()" class="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition flex items-center justify-center">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="eventForm" onsubmit="saveEventForm(event)" class="p-6 space-y-4 text-xs">
+        <input type="hidden" id="editEventId" value="">
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Cấp hành chính -->
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Cấp hành chính <span class="text-rose-500">*</span></label>
+            <select id="modalLevel" required class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+              <option value="COMMUNE">Xã / Phường / Thị trấn</option>
+              <option value="DISTRICT">Huyện / Quận / TX / TP thuộc tỉnh</option>
+              <option value="HAMLET">Ấp / Khóm / Thôn / Bản / Tổ dân phố</option>
+              <option value="PROVINCE">Tỉnh / Thành phố trực thuộc TW</option>
+            </select>
+          </div>
+
+          <!-- Loại biến động -->
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Hình thức biến động <span class="text-rose-500">*</span></label>
+            <select id="modalType" required class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+              <option value="SAP_NHAP">Sáp nhập vào đơn vị khác</option>
+              <option value="CHIA_TACH">Chia tách thành đơn vị mới</option>
+              <option value="DOI_TEN">Đổi tên / Thành lập mới trên cơ sở cũ</option>
+              <option value="NANG_CAP">Nâng cấp đô thị (Xã -> Thị trấn, Huyện -> Quận/TX)</option>
+              <option value="CHUYEN_TRUC_THUOC">Chuyển quyền quản lý sang Huyện/Tỉnh khác</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Tên cũ -->
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Tên đơn vị CŨ <span class="text-rose-500">*</span></label>
+            <input type="text" id="modalOldName" required placeholder="Ví dụ: Xã Định An"
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+            <span class="text-[10px] text-slate-400">Tên đơn vị trước khi có nghị định</span>
+          </div>
+
+          <!-- Tên mới -->
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Tên đơn vị MỚI sau biến động <span class="text-rose-500">*</span></label>
+            <input type="text" id="modalNewName" required placeholder="Ví dụ: Thị trấn Định An"
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+            <span class="text-[10px] text-slate-400">Tên mới được thành lập/sáp nhập đến</span>
+          </div>
+        </div>
+
+        <!-- Phạm vi phụ thuộc (Ví dụ Xã thuộc Huyện nào, Huyện thuộc Tỉnh nào) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Đơn vị cấp trên trực tiếp (Cha)</label>
+            <input type="text" id="modalParentScope" placeholder="Ví dụ: Huyện Trà Cú, Tỉnh Trà Vinh"
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+            <span class="text-[10px] text-slate-400">Để định danh chính xác xã/ấp thuộc huyện/tỉnh nào</span>
+          </div>
+
+          <!-- Ngày hiệu lực -->
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Thời điểm có hiệu lực <span class="text-rose-500">*</span></label>
+            <div class="grid grid-cols-2 gap-2">
+              <input type="number" id="modalEffectiveYear" min="1945" max="2035" required placeholder="Năm (VD: 2008)"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+              <input type="date" id="modalEffectiveDate"
+                class="w-full px-2.5 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium text-slate-600">
+            </div>
+            <span class="text-[10px] text-slate-400">Ngày văn bản có hiệu lực thi hành</span>
+          </div>
+        </div>
+
+        <!-- Căn cứ pháp lý & Nghị định -->
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">Căn cứ pháp lý (Nghị quyết / Nghị định / Quyết định)</label>
+          <input type="text" id="modalLegalDoc" placeholder="Ví dụ: Nghị định số 86/2008/NĐ-CP của Chính phủ"
+            class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium">
+        </div>
+
+        <!-- Ghi chú giải thích phạm vi -->
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">Ghi chú chi tiết về sự kiện</label>
+          <textarea id="modalNote" rows="2" placeholder="Ví dụ: Thành lập thị trấn Định An trên cơ sở điều chỉnh 403,2 ha diện tích và 5.444 nhân khẩu của xã Định An..."
+            class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-brand-500 outline-none font-medium"></textarea>
+        </div>
+
+        <div class="flex justify-end space-x-2 pt-3 border-t border-slate-200">
+          <button type="button" onclick="closeModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold transition">
+            Hủy Bỏ
+          </button>
+          <button type="submit" class="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-semibold transition flex items-center space-x-1.5 shadow-sm">
+            <i class="fa-solid fa-floppy-disk"></i>
+            <span>Lưu Sự Kiện</span>
+          </button>
+        </div>
+      </form>
+
+    </div>
+  </div>
+
+  <!-- SCRIPT XỬ LÝ 100% CLIENT-SIDE -->
+  <script>
+    /* ====================================================================
+       1. CƠ SỞ DỮ LIỆU MẪU BAN ĐẦU (SEED DATA - BIẾN ĐỘNG THỰC TẾ)
+       ==================================================================== */
+    const DEFAULT_SEED_DATA = [
+      // 1. Tỉnh Trà Vinh & Huyện Trà Cú & Duyên Hải
+      {
+        id: "evt_tv_001",
+        level: "COMMUNE",
+        type: "NANG_CAP",
+        oldName: "Xã Định An",
+        newName: "Thị trấn Định An",
+        parentScope: "Huyện Trà Cú, Tỉnh Trà Vinh",
+        effectiveYear: 2008,
+        effectiveDate: "2008-08-01",
+        legalDoc: "Nghị định số 86/2008/NĐ-CP",
+        note: "Thành lập thị trấn Định An thuộc huyện Trà Cú trên cơ sở điều chỉnh một phần diện tích và dân số của xã Định An."
+      },
+      {
+        id: "evt_tv_002",
+        level: "DISTRICT",
+        type: "CHIA_TACH",
+        oldName: "Huyện Duyên Hải",
+        newName: "Thị xã Duyên Hải & Huyện Duyên Hải",
+        parentScope: "Tỉnh Trà Vinh",
+        effectiveYear: 2015,
+        effectiveDate: "2015-05-15",
+        legalDoc: "Nghị quyết số 934/NQ-UBTVQH13",
+        note: "Thành lập thị xã Duyên Hải trên cơ sở tách một phần diện tích tự nhiên và dân số của huyện Duyên Hải."
+      },
+      {
+        id: "evt_tv_003",
+        level: "COMMUNE",
+        type: "CHIA_TACH",
+        oldName: "Xã Lưu Nghiệp Anh",
+        newName: "Xã Thanh Sơn & Xã Lưu Nghiệp Anh",
+        parentScope: "Huyện Trà Cú, Tỉnh Trà Vinh",
+        effectiveYear: 2003,
+        effectiveDate: "2003-12-10",
+        legalDoc: "Nghị định số 157/2003/NĐ-CP",
+        note: "Chia tách thành lập xã Thanh Sơn thuộc huyện Trà Cú từ xã Lưu Nghiệp Anh."
+      },
+      {
+        id: "evt_tv_004",
+        level: "PROVINCE",
+        type: "CHIA_TACH",
+        oldName: "Tỉnh Cửu Long",
+        newName: "Tỉnh Trà Vinh & Tỉnh Vĩnh Long",
+        parentScope: "Việt Nam",
+        effectiveYear: 1991,
+        effectiveDate: "1991-12-26",
+        legalDoc: "Nghị quyết Quốc hội khóa VIII",
+        note: "Chia tách tỉnh Cửu Long tái lập tỉnh Vĩnh Long và tỉnh Trà Vinh."
+      },
+
+      // 2. Bình Dương / TP.HCM: Huyện Bến Cát -> Thị xã -> Thành phố
+      {
+        id: "evt_bd_001",
+        level: "DISTRICT",
+        type: "NANG_CAP",
+        oldName: "Huyện Bến Cát",
+        newName: "Thị xã Bến Cát",
+        parentScope: "Tỉnh Bình Dương",
+        effectiveYear: 2013,
+        effectiveDate: "2013-12-29",
+        legalDoc: "Nghị quyết số 136/NQ-CP",
+        note: "Thành lập thị xã Bến Cát và huyện Bàu Bàng trên cơ sở chia tách huyện Bến Cát."
+      },
+      {
+        id: "evt_bd_002",
+        level: "DISTRICT",
+        type: "NANG_CAP",
+        oldName: "Thị xã Bến Cát",
+        newName: "Thành phố Bến Cát",
+        parentScope: "Tỉnh Bình Dương",
+        effectiveYear: 2024,
+        effectiveDate: "2024-05-01",
+        legalDoc: "Nghị quyết số 1012/NQ-UBTVQH15",
+        note: "Nâng cấp Thị xã Bến Cát thành Thành phố Bến Cát trực thuộc tỉnh Bình Dương."
+      },
+      {
+        id: "evt_bd_003",
+        level: "COMMUNE",
+        type: "NANG_CAP",
+        oldName: "Xã An Thạnh",
+        newName: "Phường An Thạnh",
+        parentScope: "Thị xã Thuận An (Nay là TP Thuận An), Tỉnh Bình Dương",
+        effectiveYear: 2011,
+        effectiveDate: "2011-01-13",
+        legalDoc: "Nghị quyết số 04/NQ-CP",
+        note: "Thành lập phường An Thạnh thuộc thị xã Thuận An."
+      },
+
+      // 3. Hà Nội: Huyện Hà Tây sáp nhập về Hà Nội
+      {
+        id: "evt_hn_001",
+        level: "PROVINCE",
+        type: "SAP_NHAP",
+        oldName: "Tỉnh Hà Tây",
+        newName: "Thành phố Hà Nội",
+        parentScope: "Việt Nam",
+        effectiveYear: 2008,
+        effectiveDate: "2008-08-01",
+        legalDoc: "Nghị quyết số 15/2008/QH12",
+        note: "Hợp nhất toàn bộ tỉnh Hà Tây và huyện Mê Linh (Vĩnh Phúc) vào thành phố Hà Nội."
+      },
+      {
+        id: "evt_hn_002",
+        level: "DISTRICT",
+        type: "DOI_TEN",
+        oldName: "Thành phố Hà Đông (Tỉnh Hà Tây)",
+        newName: "Quận Hà Đông (Thành phố Hà Nội)",
+        parentScope: "Thành phố Hà Nội",
+        effectiveYear: 2009,
+        effectiveDate: "2009-05-08",
+        legalDoc: "Nghị quyết số 19/NQ-CP",
+        note: "Chuyển thành phố Hà Đông thành Quận Hà Đông thuộc TP Hà Nội."
+      },
+
+      // 4. TP. Hồ Chí Minh: Huyện Hóc Môn tách Quận 12; Quận 2, 9, Thủ Đức lập TP Thủ Đức
+      {
+        id: "evt_hcm_001",
+        level: "COMMUNE",
+        type: "CHIA_TACH",
+        oldName: "Xã An Phú Đông, Huyện Hóc Môn",
+        newName: "Phường An Phú Đông, Quận 12",
+        parentScope: "TP. Hồ Chí Minh",
+        effectiveYear: 1997,
+        effectiveDate: "1997-01-06",
+        legalDoc: "Nghị định số 03-CP",
+        note: "Tách một phần huyện Hóc Môn để thành lập Quận 12 và chuyển xã An Phú Đông thành phường An Phú Đông."
+      },
+      {
+        id: "evt_hcm_002",
+        level: "DISTRICT",
+        type: "SAP_NHAP",
+        oldName: "Quận 2, Quận 9, Quận Thủ Đức",
+        newName: "Thành phố Thủ Đức",
+        parentScope: "TP. Hồ Chí Minh",
+        effectiveYear: 2021,
+        effectiveDate: "2021-01-01",
+        legalDoc: "Nghị quyết số 1111/NQ-UBTVQH14",
+        note: "Sáp nhập 3 quận (Quận 2, Quận 9, Quận Thủ Đức) để thành lập Thành phố Thủ Đức thuộc TP.HCM."
+      },
+
+      // 5. Cấp Ấp/Khóm mẫu tại Trà Vinh
+      {
+        id: "evt_hamlet_001",
+        level: "HAMLET",
+        type: "DOI_TEN",
+        oldName: "Ấp Chợ",
+        newName: "Khóm Chợ",
+        parentScope: "Thị trấn Định An, Huyện Trà Cú, Tỉnh Trà Vinh",
+        effectiveYear: 2008,
+        effectiveDate: "2008-08-01",
+        legalDoc: "Quyết định UBND Tỉnh Trà Vinh",
+        note: "Chuyển đổi ấp nông thôn thành khóm đô thị khi thành lập Thị trấn Định An."
+      }
+    ];
+
+    const STORAGE_KEY = 'GEOTIMELINE_EVENTS_V2';
+
+    // Biến lưu trữ cơ sở dữ liệu động
+    let eventDatabase = [];
+
+    /* ====================================================================
+       2. KHỞI TẠO & LƯU TRỮ LOCALSTORAGE
+       ==================================================================== */
+    function initDatabase() {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        try {
+          eventDatabase = JSON.parse(stored);
+        } catch (e) {
+          eventDatabase = [...DEFAULT_SEED_DATA];
+          saveDatabase();
+        }
+      } else {
+        eventDatabase = [...DEFAULT_SEED_DATA];
+        saveDatabase();
+      }
+      updateEventBadge();
+      renderDatabaseTable();
+    }
+
+    function saveDatabase() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(eventDatabase));
+      updateEventBadge();
+    }
+
+    function resetDefaultDatabase() {
+      if (confirm('Bạn có chắc chắn muốn khôi phục cơ sở dữ liệu mẫu ban đầu không? Mọi dữ liệu tự thêm sẽ bị ghi đè.')) {
+        eventDatabase = [...DEFAULT_SEED_DATA];
+        saveDatabase();
+        renderDatabaseTable();
+        showToast('Đã khôi phục cơ sở dữ liệu mẫu thành công!');
+      }
+    }
+
+    function updateEventBadge() {
+      document.getElementById('eventCountBadge').textContent = eventDatabase.length;
+    }
+
+    /* ====================================================================
+       3. THUẬT TOÁN SUY DIỄN CHUỖI BIẾN ĐỘNG THEO THỜI GIAN (GRAPH PATH)
+       ==================================================================== */
+    /**
+     * Chuẩn hóa chuỗi tiếng Việt để so khớp tương đối
+     */
+    function normalizeStr(str) {
+      if (!str) return '';
+      return str.toLowerCase()
+        .replace(/à|á|ạ|ả|ã|â|ầ|ấ|ậ|ẩ|ẫ|ă|ằ|ắ|ặ|ẳ|ẵ/g, "a")
+        .replace(/è|é|ẹ|ẻ|ẽ|ê|ề|ế|ệ|ể|ễ/g, "e")
+        .replace(/ì|í|ị|ỉ|ĩ/g, "i")
+        .replace(/ò|ó|ọ|ỏ|õ|ô|ồ|ố|ộ|ổ|ỗ|ơ|ờ|ớ|ợ|ở|ỡ/g, "o")
+        .replace(/ù|ú|ụ|ủ|ũ|ư|ừ|ứ|ự|ử|ữ/g, "u")
+        .replace(/ỳ|ý|ỵ|ỷ|ỹ/g, "y")
+        .replace(/đ/g, "d")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    /**
+     * Thuật toán truy vết biến động:
+     * Nhận vào tên đơn vị cũ + thời điểm cũ.
+     * Duyệt qua chuỗi biến động có effectiveYear >= queryYear để tìm đích đến hiện tại.
+     */
+    function traceHistoryChain(queryAddress, queryYear, specificDate = null) {
+      const qNorm = normalizeStr(queryAddress);
+      const timelinePath = [];
+
+      // Sắp xếp các sự kiện theo trình tự thời gian tăng dần
+      const sortedEvents = [...eventDatabase].sort((a, b) => a.effectiveYear - b.effectiveYear);
+
+      // Tìm kiếm các sự kiện khớp với địa chỉ đầu vào
+      let matchedEvents = [];
+
+      for (const ev of sortedEvents) {
+        // Chỉ xét sự kiện xảy ra SAU HOẶC TẠI thời điểm của địa chỉ cũ
+        if (ev.effectiveYear >= queryYear) {
+          // So khớp tên cũ trong chuỗi truy vấn
+          const oldNorm = normalizeStr(ev.oldName);
+          const parts = oldNorm.split(' ').filter(w => !['xa', 'phuong', 'thi', 'tran', 'huyen', 'quan', 'tinh', 'thanh', 'pho', 'ap', 'khom', 'thon'].includes(w));
+          const coreKeyword = parts.join(' ');
+
+          if (qNorm.includes(oldNorm) || (coreKeyword.length > 2 && qNorm.includes(coreKeyword))) {
+            matchedEvents.push(ev);
+          }
+        }
+      }
+
+      // Suy luận chuỗi biến động nhiều giai đoạn (Multi-hop Chaining)
+      // Ví dụ: Xã Định An -> Thị trấn Định An (2008), sau đó nếu có sự kiện tiếp theo của TT Định An -> sẽ tiếp tục nối
+      let currentName = queryAddress;
+      let chainedTimeline = [];
+      let currentCheckYear = queryYear;
+
+      for (const ev of matchedEvents) {
+        const oldNorm = normalizeStr(ev.oldName);
+        const curNorm = normalizeStr(currentName);
+
+        if (curNorm.includes(oldNorm) || oldNorm.split(' ').some(w => w.length > 3 && curNorm.includes(w))) {
+          chainedTimeline.push(ev);
+          // Cập nhật tên mới sau biến động
+          currentName = replaceOldWithNew(currentName, ev.oldName, ev.newName, ev.parentScope);
+          currentCheckYear = ev.effectiveYear;
+        }
+      }
+
+      // Xây dựng kết quả chuẩn hóa
+      let finalAddress = currentName;
+      if (chainedTimeline.length === 0) {
+        // Không tìm thấy biến động lớn -> Giữ nguyên địa chỉ và cảnh báo
+        finalAddress = queryAddress;
+      }
+
+      return {
+        originalQuery: queryAddress,
+        queryYear: queryYear,
+        finalAddress: finalAddress,
+        steps: chainedTimeline
+      };
+    }
+
+    /**
+     * Thay thế thành phần địa chỉ cũ bằng tên mới một cách thông minh
+     */
+    function replaceOldWithNew(fullAddr, oldTerm, newTerm, parentScope) {
+      // Tách bỏ tiền tố không cần thiết để thay thế chính xác
+      const cleanOld = oldTerm.replace(/^(xã|phường|thị trấn|huyện|quận|thị xã|tỉnh|thành phố|ấp|khóm|thôn)\s+/i, '');
+      const regex = new RegExp(oldTerm, 'i');
+      
+      if (regex.test(fullAddr)) {
+        return fullAddr.replace(regex, newTerm);
+      } else if (fullAddr.toLowerCase().includes(cleanOld.toLowerCase())) {
+        const cleanRegex = new RegExp(`(xã|phường|thị trấn|huyện|quận|thị xã|tỉnh|ấp|khóm)?\\s*${cleanOld}`, 'i');
+        return fullAddr.replace(cleanRegex, newTerm);
+      }
+
+      // Nếu không thay trực tiếp được thì ghép cấu trúc mới
+      return `${newTerm}, ${parentScope || fullAddr}`;
+    }
+
+    /* ====================================================================
+       4. XỬ LÝ GIAO DIỆN TRA CỨU & HIỂN THỊ KẾT QUẢ
+       ==================================================================== */
+    function handleSearch(e) {
+      e.preventDefault();
+      const rawAddress = document.getElementById('inputOldAddress').value.trim();
+      const rawYear = parseInt(document.getElementById('inputOldYear').value);
+      const exactDate = document.getElementById('inputOldExactDate').value;
+
+      // Kiểm tra ghép từ bộ lọc chi tiết nếu người dùng có nhập
+      const p = document.getElementById('subProvince').value.trim();
+      const d = document.getElementById('subDistrict').value.trim();
+      const c = document.getElementById('subCommune').value.trim();
+      const h = document.getElementById('subHamlet').value.trim();
+
+      let targetQuery = rawAddress;
+      if (h || c || d || p) {
+        const parts = [h, c, d, p].filter(Boolean);
+        targetQuery = parts.join(', ');
+      }
+
+      if (!targetQuery) {
+        showToast('Vui lòng nhập địa chỉ cần tra cứu!', true);
+        return;
+      }
+
+      const result = traceHistoryChain(targetQuery, rawYear, exactDate);
+      displaySearchResult(result);
+    }
+
+    function displaySearchResult(res) {
+      const container = document.getElementById('resultContainer');
+      container.classList.remove('hidden');
+
+      document.getElementById('resOldTimestamp').textContent = `Năm ${res.queryYear}`;
+      document.getElementById('resOldAddressText').textContent = res.originalQuery;
+      document.getElementById('resNewAddressText').textContent = res.finalAddress;
+
+      const stepCount = res.steps.length;
+      const stepBadge = document.getElementById('resStepCount');
+      const statusTag = document.getElementById('resultStatusTag');
+      const effDateSpan = document.getElementById('resEffectiveDate');
+
+      if (stepCount > 0) {
+        stepBadge.textContent = `Trải qua ${stepCount} mốc biến động`;
+        statusTag.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 w-fit";
+        statusTag.textContent = "Đã xác định lộ trình biến động";
+        effDateSpan.textContent = `Hiệu lực gần nhất: ${res.steps[res.steps.length - 1].effectiveDate || res.steps[res.steps.length - 1].effectiveYear}`;
+      } else {
+        stepBadge.textContent = "Không ghi nhận chia tách/sáp nhập lớn";
+        statusTag.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 w-fit";
+        statusTag.textContent = "Địa giới ổn định / Chưa có dữ liệu";
+        effDateSpan.textContent = "Địa chỉ giữ nguyên hiện trạng";
+      }
+
+      renderTimeline(res);
+
+      // Cuộn xuống xem kết quả
+      container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function renderTimeline(res) {
+      const tl = document.getElementById('timelineContainer');
+      tl.innerHTML = '';
+
+      // Node 0: Điểm khởi đầu (Địa chỉ cũ)
+      let html = `
+        <div class="relative flex items-start space-x-4 z-10">
+          <div class="w-10 h-10 rounded-full bg-slate-100 border-2 border-slate-300 flex items-center justify-center text-slate-600 font-bold text-xs shadow-xs shrink-0">
+            <i class="fa-solid fa-flag"></i>
+          </div>
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex-1 shadow-2xs">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-800 uppercase">Thời điểm ghi nhận ban đầu</span>
+              <span class="px-2 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold font-mono">${res.queryYear}</span>
+            </div>
+            <p class="text-xs font-semibold text-slate-700 mt-1">${escapeHtml(res.originalQuery)}</p>
+            <p class="text-[11px] text-slate-400 mt-0.5">Thời điểm căn cứ trên hồ sơ, giấy chứng nhận hoặc bản đồ địa chính cũ.</p>
+          </div>
+        </div>
+      `;
+
+      if (res.steps.length === 0) {
+        html += `
+          <div class="relative flex items-start space-x-4 z-10">
+            <div class="w-10 h-10 rounded-full bg-emerald-100 border-2 border-emerald-500 flex items-center justify-center text-emerald-700 font-bold text-xs shadow-xs shrink-0">
+              <i class="fa-solid fa-check"></i>
+            </div>
+            <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex-1 shadow-2xs">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-emerald-900 uppercase">Hiện tại</span>
+                <span class="px-2 py-0.5 rounded bg-emerald-200 text-emerald-800 text-[10px] font-bold">Chuẩn hóa</span>
+              </div>
+              <p class="text-xs font-semibold text-emerald-800 mt-1">${escapeHtml(res.finalAddress)}</p>
+              <p class="text-[11px] text-emerald-600 mt-0.5">Không phát hiện sự kiện sáp nhập hay chia tách trong cơ sở dữ liệu đã nạp đối với khu vực này.</p>
+            </div>
+          </div>
+        `;
+      } else {
+        res.steps.forEach((step, idx) => {
+          const typeBadge = getEventTypeBadge(step.type);
+          html += `
+            <div class="relative flex items-start space-x-4 z-10">
+              <div class="w-10 h-10 rounded-full bg-brand-50 border-2 border-brand-600 flex items-center justify-center text-brand-700 font-bold text-xs shadow-xs shrink-0">
+                <span>${idx + 1}</span>
+              </div>
+              <div class="bg-white border border-slate-200 rounded-xl p-4 flex-1 shadow-sm hover:border-brand-300 transition">
+                <div class="flex flex-wrap items-center justify-between gap-1 mb-1">
+                  <div class="flex items-center space-x-2">
+                    <span class="text-xs font-bold text-slate-900">${getLevelName(step.level)}: ${escapeHtml(step.oldName)} &rarr; ${escapeHtml(step.newName)}</span>
+                    ${typeBadge}
+                  </div>
+                  <span class="px-2 py-0.5 rounded bg-indigo-50 text-brand-700 text-[11px] font-bold font-mono">${step.effectiveDate || step.effectiveYear}</span>
+                </div>
+                
+                <div class="text-xs text-slate-600 mt-2 space-y-1">
+                  <p><b class="text-slate-800">Căn cứ pháp lý:</b> <span class="text-brand-700 font-medium">${escapeHtml(step.legalDoc || 'Chưa ghi nhận')}</span></p>
+                  ${step.parentScope ? `<p><b class="text-slate-800">Phạm vi trực thuộc:</b> ${escapeHtml(step.parentScope)}</p>` : ''}
+                  ${step.note ? `<p class="text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-100 mt-1.5">${escapeHtml(step.note)}</p>` : ''}
+                </div>
+              </div>
+            </div>
+          `;
+        });
+
+        // Node cuối: Hiện tại
+        html += `
+          <div class="relative flex items-start space-x-4 z-10">
+            <div class="w-10 h-10 rounded-full bg-emerald-600 border-2 border-white flex items-center justify-center text-white font-bold text-xs shadow-md shrink-0">
+              <i class="fa-solid fa-location-dot"></i>
+            </div>
+            <div class="bg-emerald-50/80 border border-emerald-300 rounded-xl p-3.5 flex-1 shadow-2xs">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-emerald-900 uppercase">Tên gọi & Địa chỉ hành chính chuẩn hiện tại</span>
+                <span class="px-2 py-0.5 rounded bg-emerald-200 text-emerald-800 text-[10px] font-bold">Hôm nay</span>
+              </div>
+              <p class="text-sm font-bold text-emerald-900 mt-1">${escapeHtml(res.finalAddress)}</p>
+            </div>
+          </div>
+        `;
+      }
+
+      tl.innerHTML = html;
+    }
+
+    function copyCurrentAddress() {
+      const text = document.getElementById('resNewAddressText').textContent;
+      if (!text) return;
+      
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('Đã sao chép địa chỉ mới vào bộ nhớ đệm!');
+    }
+
+    function fillSample(address, year) {
+      document.getElementById('inputOldAddress').value = address;
+      document.getElementById('inputOldYear').value = year;
+      document.getElementById('searchForm').dispatchEvent(new Event('submit'));
+    }
+
+    function toggleDetailedInputs() {
+      const el = document.getElementById('detailedInputsContainer');
+      const icon = document.getElementById('detailedFilterIcon');
+      if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        icon.classList.add('rotate-180');
+      } else {
+        el.classList.add('hidden');
+        icon.classList.remove('rotate-180');
+      }
+    }
+
+    /* ====================================================================
+       5. QUẢN TRỊ CƠ SỞ DỮ LIỆU (THÊM / SỬA / XÓA SỰ KIỆN)
+       ==================================================================== */
+    function renderDatabaseTable() {
+      const tbody = document.getElementById('dbTableBody');
+      const empty = document.getElementById('dbEmptyNotice');
+      const keyword = normalizeStr(document.getElementById('dbSearchInput')?.value || '');
+      const filterLevel = document.getElementById('dbFilterLevel')?.value || 'ALL';
+
+      tbody.innerHTML = '';
+
+      let filtered = eventDatabase.filter(ev => {
+        if (filterLevel !== 'ALL' && ev.level !== filterLevel) return false;
+        if (!keyword) return true;
+        const searchPool = normalizeStr(`${ev.oldName} ${ev.newName} ${ev.parentScope} ${ev.legalDoc} ${ev.note}`);
+        return searchPool.includes(keyword);
+      });
+
+      // Sắp xếp giảm dần theo năm
+      filtered.sort((a, b) => b.effectiveYear - a.effectiveYear);
+
+      if (filtered.length === 0) {
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      filtered.forEach(ev => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50/80 transition";
+        tr.innerHTML = `
+          <td class="py-3 px-4">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${getLevelBadgeClass(ev.level)}">
+              ${getLevelName(ev.level)}
+            </span>
+          </td>
+          <td class="py-3 px-4 font-semibold text-slate-800">
+            ${escapeHtml(ev.oldName)}
+            ${ev.parentScope ? `<span class="block text-[10px] font-normal text-slate-400 truncate max-w-xs">${escapeHtml(ev.parentScope)}</span>` : ''}
+          </td>
+          <td class="py-3 px-4">
+            ${getEventTypeBadge(ev.type)}
+          </td>
+          <td class="py-3 px-4 font-bold text-brand-700">
+            ${escapeHtml(ev.newName)}
+          </td>
+          <td class="py-3 px-4 font-mono text-slate-600">
+            ${ev.effectiveDate || ev.effectiveYear}
+          </td>
+          <td class="py-3 px-4 text-slate-600 max-w-xs truncate" title="${escapeHtml(ev.legalDoc || '')}">
+            ${escapeHtml(ev.legalDoc || '---')}
+          </td>
+          <td class="py-3 px-4 text-center space-x-1 whitespace-nowrap">
+            <button onclick="editEvent('${ev.id}')" class="p-1.5 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition" title="Chỉnh sửa">
+              <i class="fa-regular fa-pen-to-square"></i>
+            </button>
+            <button onclick="deleteEvent('${ev.id}')" class="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Xóa">
+              <i class="fa-regular fa-trash-can"></i>
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function filterDatabaseTable() {
+      renderDatabaseTable();
+    }
+
+    function openModalAddEvent() {
+      document.getElementById('editEventId').value = '';
+      document.getElementById('modalTitle').innerHTML = `<i class="fa-solid fa-folder-plus text-brand-600"></i><span>Thêm Sự Kiện Biến Động Địa Giới Mới</span>`;
+      document.getElementById('eventForm').reset();
+      document.getElementById('modalEffectiveYear').value = new Date().getFullYear();
+      document.getElementById('eventModal').classList.remove('hidden');
+    }
+
+    function editEvent(id) {
+      const ev = eventDatabase.find(x => x.id === id);
+      if (!ev) return;
+
+      document.getElementById('editEventId').value = ev.id;
+      document.getElementById('modalTitle').innerHTML = `<i class="fa-solid fa-pen-to-square text-brand-600"></i><span>Chỉnh Sửa Sự Kiện Biến Động</span>`;
+      document.getElementById('modalLevel').value = ev.level;
+      document.getElementById('modalType').value = ev.type;
+      document.getElementById('modalOldName').value = ev.oldName;
+      document.getElementById('modalNewName').value = ev.newName;
+      document.getElementById('modalParentScope').value = ev.parentScope || '';
+      document.getElementById('modalEffectiveYear').value = ev.effectiveYear;
+      document.getElementById('modalEffectiveDate').value = ev.effectiveDate || '';
+      document.getElementById('modalLegalDoc').value = ev.legalDoc || '';
+      document.getElementById('modalNote').value = ev.note || '';
+
+      document.getElementById('eventModal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('eventModal').classList.add('hidden');
+    }
+
+    function saveEventForm(e) {
+      e.preventDefault();
+      const editId = document.getElementById('editEventId').value;
+      
+      const eventData = {
+        id: editId || 'evt_' + Date.now(),
+        level: document.getElementById('modalLevel').value,
+        type: document.getElementById('modalType').value,
+        oldName: document.getElementById('modalOldName').value.trim(),
+        newName: document.getElementById('modalNewName').value.trim(),
+        parentScope: document.getElementById('modalParentScope').value.trim(),
+        effectiveYear: parseInt(document.getElementById('modalEffectiveYear').value),
+        effectiveDate: document.getElementById('modalEffectiveDate').value || '',
+        legalDoc: document.getElementById('modalLegalDoc').value.trim(),
+        note: document.getElementById('modalNote').value.trim()
+      };
+
+      if (editId) {
+        const idx = eventDatabase.findIndex(x => x.id === editId);
+        if (idx !== -1) eventDatabase[idx] = eventData;
+        showToast('Đã cập nhật sự kiện thành công!');
+      } else {
+        eventDatabase.unshift(eventData);
+        showToast('Đã thêm sự kiện biến động mới!');
+      }
+
+      saveDatabase();
+      renderDatabaseTable();
+      closeModal();
+    }
+
+    function deleteEvent(id) {
+      if (confirm('Bạn có chắc chắn muốn xóa bản ghi biến động này khỏi cơ sở dữ liệu?')) {
+        eventDatabase = eventDatabase.filter(x => x.id !== id);
+        saveDatabase();
+        renderDatabaseTable();
+        showToast('Đã xóa sự kiện thành công!');
+      }
+    }
+
+    /* ====================================================================
+       6. NHẬP / XUẤT DỮ LIỆU (JSON & CSV EXCEL)
+       ==================================================================== */
+    function exportDataJSON() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(eventDatabase, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `CSDL_DiaGioiHanhChinh_${Date.now()}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      showToast('Đã xuất tệp JSON thành công!');
+    }
+
+    function exportDataCSV() {
+      if (eventDatabase.length === 0) {
+        showToast('Cơ sở dữ liệu đang trống!', true);
+        return;
+      }
+
+      // Tạo header UTF-8 BOM để Excel hiển thị đúng tiếng Việt
+      let csvContent = "\uFEFF";
+      csvContent += "Mã,Cấp Hành Chính,Hình Thức,Tên Cũ,Tên Mới,Đơn Vị Cha,Năm Hiệu Lực,Ngày Cụ Thể,Căn Cứ Pháp Lý,Ghi Chú\n";
+
+      eventDatabase.forEach(ev => {
+        const row = [
+          `"${ev.id}"`,
+          `"${getLevelName(ev.level)}"`,
+          `"${ev.type}"`,
+          `"${(ev.oldName || '').replace(/"/g, '""')}"`,
+          `"${(ev.newName || '').replace(/"/g, '""')}"`,
+          `"${(ev.parentScope || '').replace(/"/g, '""')}"`,
+          `"${ev.effectiveYear}"`,
+          `"${ev.effectiveDate || ''}"`,
+          `"${(ev.legalDoc || '').replace(/"/g, '""')}"`,
+          `"${(ev.note || '').replace(/"/g, '""')}"`
+        ];
+        csvContent += row.join(",") + "\n";
+      });
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `CSDL_DiaGioiHanhChinh_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      showToast('Đã xuất tệp CSV Excel thành công!');
+    }
+
+    function importDataFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const content = e.target.result;
+          if (file.name.endsWith('.json')) {
+            const parsed = JSON.parse(content);
+            if (Array.isArray(parsed)) {
+              eventDatabase = parsed;
+              saveDatabase();
+              renderDatabaseTable();
+              showToast(`Đã nạp thành công ${parsed.length} sự kiện từ file JSON!`);
+            } else {
+              throw new Error('Cấu trúc file JSON không hợp lệ');
+            }
+          } else if (file.name.endsWith('.csv')) {
+            // Parser CSV đơn giản
+            const lines = content.split('\n');
+            const importedEvents = [];
+            for (let i = 1; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
+              const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+              if (cols.length >= 5) {
+                importedEvents.push({
+                  id: cols[0] || 'csv_' + Date.now() + '_' + i,
+                  level: 'COMMUNE',
+                  type: 'DOI_TEN',
+                  oldName: cols[3],
+                  newName: cols[4],
+                  parentScope: cols[5] || '',
+                  effectiveYear: parseInt(cols[6]) || 2000,
+                  effectiveDate: cols[7] || '',
+                  legalDoc: cols[8] || '',
+                  note: cols[9] || ''
+                });
+              }
+            }
+            if (importedEvents.length > 0) {
+              eventDatabase = [...importedEvents, ...eventDatabase];
+              saveDatabase();
+              renderDatabaseTable();
+              showToast(`Đã nạp thành công ${importedEvents.length} bản ghi từ file CSV!`);
+            }
+          }
+        } catch (err) {
+          showToast('Lỗi khi đọc file: ' + err.message, true);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    /* ====================================================================
+       7. CÁC HÀM TIỆN ÍCH & GIAO DIỆN
+       ==================================================================== */
+    function switchTab(tabId) {
+      const pSearch = document.getElementById('panelSearch');
+      const pConfig = document.getElementById('panelConfig');
+      const bSearch = document.getElementById('tabBtnSearch');
+      const bConfig = document.getElementById('tabBtnConfig');
+
+      if (tabId === 'search') {
+        pSearch.classList.remove('hidden');
+        pConfig.classList.add('hidden');
+        bSearch.className = "px-3 sm:px-4 py-2 rounded-lg bg-white text-brand-700 shadow-xs transition flex items-center space-x-1.5";
+        bConfig.className = "px-3 sm:px-4 py-2 rounded-lg text-slate-600 hover:text-slate-900 transition flex items-center space-x-1.5";
+      } else {
+        pSearch.classList.add('hidden');
+        pConfig.classList.remove('hidden');
+        bConfig.className = "px-3 sm:px-4 py-2 rounded-lg bg-white text-brand-700 shadow-xs transition flex items-center space-x-1.5";
+        bSearch.className = "px-3 sm:px-4 py-2 rounded-lg text-slate-600 hover:text-slate-900 transition flex items-center space-x-1.5";
+        renderDatabaseTable();
+      }
+    }
+
+    function getLevelName(level) {
+      switch (level) {
+        case 'PROVINCE': return 'Tỉnh / Thành phố';
+        case 'DISTRICT': return 'Huyện / Quận / TX';
+        case 'COMMUNE': return 'Xã / Phường / TT';
+        case 'HAMLET': return 'Ấp / Khóm / Thôn';
+        default: return level;
+      }
+    }
+
+    function getLevelBadgeClass(level) {
+      switch (level) {
+        case 'PROVINCE': return 'bg-purple-100 text-purple-700 border border-purple-200';
+        case 'DISTRICT': return 'bg-blue-100 text-blue-700 border border-blue-200';
+        case 'COMMUNE': return 'bg-emerald-100 text-emerald-700 border border-emerald-200';
+        case 'HAMLET': return 'bg-amber-100 text-amber-700 border border-amber-200';
+        default: return 'bg-slate-100 text-slate-700';
+      }
+    }
+
+    function getEventTypeBadge(type) {
+      switch (type) {
+        case 'SAP_NHAP':
+          return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200"><i class="fa-solid fa-compress mr-1"></i>Sáp nhập</span>`;
+        case 'CHIA_TACH':
+          return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"><i class="fa-solid fa-arrows-split-up-and-left mr-1"></i>Chia tách</span>`;
+        case 'NANG_CAP':
+          return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-brand-700 border border-brand-200"><i class="fa-solid fa-arrow-trend-up mr-1"></i>Nâng cấp</span>`;
+        case 'DOI_TEN':
+          return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200"><i class="fa-solid fa-pen mr-1"></i>Đổi tên</span>`;
+        default:
+          return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">${type}</span>`;
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    function showToast(message, isError = false) {
+      const toastBox = document.getElementById('toastBox');
+      const toastMsg = document.getElementById('toastMsg');
+      const toastIcon = document.getElementById('toastIcon');
+
+      toastMsg.textContent = message;
+      if (isError) {
+        toastIcon.className = "fa-solid fa-circle-exclamation text-rose-400 text-base";
+      } else {
+        toastIcon.className = "fa-solid fa-circle-check text-emerald-400 text-base";
+      }
+
+      toastBox.classList.remove('translate-x-full', 'opacity-0');
+      setTimeout(() => {
+        toastBox.classList.add('translate-x-full', 'opacity-0');
+      }, 3500);
+    }
+
+    // Khởi chạy khi load trang
+    window.addEventListener('DOMContentLoaded', () => {
+      initDatabase();
+    });
+  </script>
+</body>
+</html>
